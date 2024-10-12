@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/datasets/dota.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/dotav2.py', '../_base_/schedules/schedule_1x.py',
     '../_base_/default_runtime.py'
 ]
 angle_version = 'le90'
@@ -34,11 +34,11 @@ model = dict(
         relu_before_extra_convs=True),
     bbox_head=dict(
         type='Point2RBoxV2Head',
-        num_classes=15,
+        num_classes=18,
         in_channels=128,
         feat_channels=128,
         strides=[8],
-        square_cls=[1, 9, 11],
+        square_cls=[1, 9, 11, 16, 17],
         loss_cls=dict(
             type='mmdet.FocalLoss',
             use_sigmoid=True,
@@ -92,7 +92,7 @@ if not e2e_test_mode:
                         type='DOTAMetric',
                         metric='mAP',
                         format_only=True,
-                        outfile_prefix='data/split_ss_dota/point2rbox_v2_pseudo_labels')
+                        outfile_prefix='data/split_ss_dota2_0/point2rbox_v2_pseudo_labels')
 
 # optimizer
 optim_wrapper = dict(

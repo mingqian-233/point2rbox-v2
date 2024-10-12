@@ -29,8 +29,8 @@ from mmrotate.models.task_modules.synthesis_generators import \
 from third_parties.ted.ted import TED
 
 
-def get_single_pattern(image, bbox, label):
-    if bbox[2] < 16 or bbox[3] < 16 or bbox[2] > 128 or bbox[3] > 128:
+def get_single_pattern(image, bbox, label, square_cls):
+    if bbox[2] < 16 or bbox[3] < 16 or bbox[2] > 512 or bbox[3] > 512:
         raise
 
     def obb2poly(obb):
@@ -77,8 +77,8 @@ def get_single_pattern(image, bbox, label):
     chip = torch.cat((chip, alpha))
         
     w, h, t = chip.new_tensor((bbox[2] * (0.7 + 0.5 * np.random.rand()), bbox[3] * (0.7 + 0.5 * np.random.rand()), np.pi * np.random.rand()))
-    if label in (1, 9, 11):
-        t = 0
+    if label in square_cls:
+        t *= 0
     cosa = torch.abs(torch.cos(t))
     sina = torch.abs(torch.sin(t))
     sx, sy = int(torch.ceil(cosa * w + sina * h)), int(torch.ceil(sina * w + cosa * h))
@@ -94,13 +94,13 @@ def get_single_pattern(image, bbox, label):
     return (chip, bbox, label)
 
 
-def get_copy_paste_cache(images, bboxes, labels, num_copies):
+def get_copy_paste_cache(images, bboxes, labels, square_cls, num_copies):
     bboxes = bboxes.cpu().numpy()
     labels = labels.cpu().numpy()
     patterns = []
     for b, l in zip(bboxes, labels):
         try:
-            p = get_single_pattern(images, b, l)
+            p = get_single_pattern(images, b, l, square_cls)
             patterns.append(p)
             if len(patterns) > num_copies:
                 break
@@ -296,17 +296,17 @@ class Point2RBoxV2(SingleStageDetector):
                 self.bbox_head.edges = batch_edges[3]
                 # cv2.imwrite('E.png', batch_edges[0].cpu().numpy() * 255)
 
-        if self.copy_paste_cache and len(batch_gt_instances) == len(self.copy_paste_cache):
-            for i in range(len(batch_gt_instances)):
-                gt_instances, patterns = batch_gt_instances[i], self.copy_paste_cache[i]
+        if self.copy_paste_cache and len(batch_gt_aug) == len(self.copy_paste_cache):
+            for i in range(len(batch_gt_aug)):
+                gt_instances, patterns = batch_gt_aug[i], self.copy_paste_cache[i]
                 bboxes_paste = []
                 labels_paste = []
                 for p, b, l in patterns:
                     h, w = p.shape[1:3]
-                    ox = np.random.randint(0, batch_inputs.shape[-1] - w)
-                    oy = np.random.randint(0, batch_inputs.shape[-2] - h)
-                    batch_inputs[i, :, oy:oy + h, ox:ox + w] = \
-                        batch_inputs[i, :, oy:oy + h, ox:ox + w] * (1 - p[(3,)]) + p[:3] * p[(3,)]
+                    ox = np.random.randint(0, batch_inputs_aug.shape[-1] - w)
+                    oy = np.random.randint(0, batch_inputs_aug.shape[-2] - h)
+                    batch_inputs_aug[i, :, oy:oy + h, ox:ox + w] = \
+                        batch_inputs_aug[i, :, oy:oy + h, ox:ox + w] * (1 - p[(3,)]) + p[:3] * p[(3,)]
                     bboxes_paste.append(b + np.float32((ox, oy, 0, 0, 0)))
                     labels_paste.append(l)
                 bboxes = torch.cat((gt_instances.bboxes.tensor, 
@@ -319,7 +319,7 @@ class Point2RBoxV2(SingleStageDetector):
                 gt_instances.bboxes = RotatedBoxes(bboxes)
                 gt_instances.labels = labels
                 gt_instances.bids = bids
-                batch_gt_instances[i] = gt_instances
+                batch_gt_aug[i] = gt_instances
 
         batch_inputs_all = torch.cat((batch_inputs, batch_inputs_aug))
         batch_data_samples_all = []
@@ -346,31 +346,32 @@ class Point2RBoxV2(SingleStageDetector):
                 self.copy_paste_cache.append(get_copy_paste_cache(images, 
                                                                   instances.bboxes.tensor, 
                                                                   instances.labels, 
+                                                                  self.bbox_head.square_cls,
                                                                   self.num_copies))
                 
-        # if np.random.rand() < 0.005:
-        #     for i in range(len(batch_inputs_all)):
-        #         img = batch_inputs_all[i]
-        #         if self.bbox_head.vis[i]:
-        #             vor, wat = self.bbox_head.vis[i]
-        #             img[0, wat != wat.max()] += 2
-        #             img[:, vor != vor.max()] -= 1
-        #         img = img.permute(1, 2, 0).cpu().numpy()
-        #         img = np.ascontiguousarray(img[..., (2, 1, 0)] * 58 + 127)
-        #         bb = batch_data_samples_all[i].gt_instances.bboxes.tensor
-        #         ll = batch_data_samples_all[i].gt_instances.labels
-        #         for b, l in zip(bb.cpu().numpy(), ll.cpu().numpy()):
-        #             b[2:4] = b[2:4].clip(3)
-        #             point2rbox_generator.plot_one_rotated_box(img, b)
-        #         if i < len(results_list):
-        #             bb = results_list[i].bboxes.tensor
-        #             if hasattr(results_list[i], 'informs'):
-        #                 for b, l in zip(bb.cpu().numpy(), results_list[i].infoms.cpu().numpy()):
-        #                     point2rbox_generator.plot_one_rotated_box(img, b, (0, 255, 0), label=f'{l}')
-        #             else:
-        #                 for b in bb.cpu().numpy():
-        #                     point2rbox_generator.plot_one_rotated_box(img, b, (0, 255, 0))
-        #         img_id = batch_data_samples_all[i].metainfo['img_id']
-        #         cv2.imwrite(f'debug/{img_id}_{i}.png', img)
+        if np.random.rand() < 0.000:
+            for i in range(len(batch_inputs_all)):
+                img = batch_inputs_all[i]
+                if self.bbox_head.vis[i]:
+                    vor, wat = self.bbox_head.vis[i]
+                    img[0, wat != wat.max()] += 2
+                    img[:, vor != vor.max()] -= 1
+                img = img.permute(1, 2, 0).cpu().numpy()
+                img = np.ascontiguousarray(img[..., (2, 1, 0)] * 58 + 127)
+                bb = batch_data_samples_all[i].gt_instances.bboxes.tensor
+                ll = batch_data_samples_all[i].gt_instances.labels
+                for b, l in zip(bb.cpu().numpy(), ll.cpu().numpy()):
+                    b[2:4] = b[2:4].clip(3)
+                    point2rbox_generator.plot_one_rotated_box(img, b)
+                if i < len(results_list):
+                    bb = results_list[i].bboxes.tensor
+                    if hasattr(results_list[i], 'informs'):
+                        for b, l in zip(bb.cpu().numpy(), results_list[i].infoms.cpu().numpy()):
+                            point2rbox_generator.plot_one_rotated_box(img, b, (0, 255, 0), label=f'{l}')
+                    else:
+                        for b in bb.cpu().numpy():
+                            point2rbox_generator.plot_one_rotated_box(img, b, (0, 255, 0))
+                img_id = batch_data_samples_all[i].metainfo['img_id']
+                cv2.imwrite(f'debug/{img_id}_{i}.png', img)
 
         return losses

@@ -214,7 +214,7 @@ class Point2RBoxV2Head(AnchorFreeHead):
 
         # Gaussian sig_x, sig_y, p
         k = bbox_pred[:, 0].sigmoid() * 2 - 1  # (-1, 1)
-        sig_x = torch.exp(1.2 * k)
+        sig_x = torch.exp(2 * k)
         sig_y = 1 / sig_x
         dx = bbox_pred[:, 1].sigmoid() * 2 - 1  # (-1, 1)
         dy = bbox_pred[:, 2].sigmoid() * 2 - 1  # (-1, 1)
@@ -412,10 +412,11 @@ class Point2RBoxV2Head(AnchorFreeHead):
                 if len(mu) >= 1:
                     pos_thres = [self.voronoi_thres['default'][0]] * self.num_classes
                     neg_thres = [self.voronoi_thres['default'][1]] * self.num_classes
-                    for item in self.voronoi_thres['override']:
-                        for cls in item[0]:
-                            pos_thres[cls] = item[1][0]
-                            neg_thres[cls] = item[1][1]
+                    if 'override' in self.voronoi_thres.keys():
+                        for item in self.voronoi_thres['override']:
+                            for cls in item[0]:
+                                pos_thres[cls] = item[1][0]
+                                neg_thres[cls] = item[1][1]
                     loss_bbox_vor += self.loss_voronoi((mu, sigma.bmm(sigma)),
                                                        label, self.images[batch_id],
                                                        pos_thres, neg_thres,
@@ -830,8 +831,10 @@ class Point2RBoxV2Head(AnchorFreeHead):
         """        
         gt_instances = data_sample[0]
         img_meta = data_sample[2]
-        img_shape = img_meta['img_shape']
-        scale_factor = img_meta['scale_factor']
+        if self.training:
+            scale_factor = [1, 1]
+        else:
+            scale_factor = img_meta['scale_factor']
         gt_bboxes = gt_instances.bboxes.tensor
         gt_labels = gt_instances.labels
         gt_pos = (gt_bboxes[:, 0:2] / self.strides[0] * scale_factor[1]).long()

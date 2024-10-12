@@ -236,6 +236,8 @@ def gaussian_voronoi_watershed_loss(mu, sigma,
         max_y = torch.max(torch.abs(xy[:, 1]))
         L_target.append(torch.stack((max_x ** 2, max_y ** 2)))
     L_target = torch.stack(L_target)
+    # mask = L_target < L
+    # L_target[mask] = L[mask]
     L = torch.diag_embed(L)
     L_target = torch.diag_embed(L_target)
     loss = gwd_loss((None, L), (None, L_target.detach()), reduction='none')

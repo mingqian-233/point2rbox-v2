@@ -7,6 +7,7 @@ angle_version = 'le90'
 # model settings
 model = dict(
     type='Point2RBoxV2',
+    num_copies=15,
     data_preprocessor=dict(
         type='mmdet.DetDataPreprocessor',
         mean=[123.675, 116.28, 103.53],

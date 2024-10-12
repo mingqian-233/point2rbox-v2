@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/datasets/dota.py', '../_base_/schedules/schedule_1x.py',
+    '../_base_/datasets/hrsc.py', '../_base_/schedules/schedule_6x.py',
     '../_base_/default_runtime.py'
 ]
 angle_version = 'le90'
@@ -7,6 +7,8 @@ angle_version = 'le90'
 # model settings
 model = dict(
     type='Point2RBoxV2',
+    copy_paste_start_epoch=24,
+    num_copies=4,
     data_preprocessor=dict(
         type='mmdet.DetDataPreprocessor',
         mean=[123.675, 116.28, 103.53],
@@ -34,28 +36,25 @@ model = dict(
         relu_before_extra_convs=True),
     bbox_head=dict(
         type='Point2RBoxV2Head',
-        num_classes=15,
+        num_classes=1,
         in_channels=128,
         feat_channels=128,
         strides=[8],
-        square_cls=[1, 9, 11],
+        edge_loss_start_epoch=48,
+        joint_angle_start_epoch=24,
+        voronoi_type='gaussian-orientation',
+        voronoi_thres=dict(default=[0.99, 0.02]),
+        square_cls=[],
+        edge_loss_cls=[0],
         loss_cls=dict(
             type='mmdet.FocalLoss',
             use_sigmoid=True,
             gamma=2.0,
             alpha=0.25,
             loss_weight=1.0),
-        loss_bbox=dict(type='mmdet.L1Loss', loss_weight=0.001),
-        loss_overlap=dict(
-            type='GaussianOverlapLoss', loss_weight=10.0),
-        loss_voronoi=dict(
-            type='GaussianVoronoiLoss', loss_weight=5.0),
-        loss_bbox_edg=dict(
-            type='EdgeLoss', loss_weight=1.0),
-        loss_bbox_syn=dict(
-            type='RotatedIoULoss', loss_weight=1.0),
+        loss_bbox=dict(type='mmdet.L1Loss', loss_weight=0.01),
         loss_ss=dict(
-            type='mmdet.SmoothL1Loss', loss_weight=1.0, beta=0.1)),
+            type='mmdet.SmoothL1Loss', loss_weight=5.0, beta=0.1)),
     # training and testing settings
     train_cfg=None,
     test_cfg=dict(
@@ -69,10 +68,10 @@ model = dict(
 train_pipeline = [
     dict(type='mmdet.LoadImageFromFile', backend_args={{_base_.backend_args}}),
     dict(type='mmdet.LoadAnnotations', with_bbox=True, box_type='qbox'),
+    dict(type='mmdet.FixShapeResize', width=800, height=800, keep_ratio=True),
     dict(type='ConvertBoxType', box_type_mapping=dict(gt_bboxes='rbox')),
     # Weakly supervised GTBox, (x,y,w,h,theta)
     dict(type='ConvertWeakSupervision', point_proportion=1., hbox_proportion=0),
-    dict(type='mmdet.Resize', scale=(1024, 1024), keep_ratio=True),
     dict(
         type='mmdet.RandomFlip',
         prob=0.75,
@@ -81,18 +80,36 @@ train_pipeline = [
         'ori_shape', 'img_shape', 'scale_factor', 'flip', 'flip_direction', 'ws_types'))
 ]
 
+val_pipeline = [
+    dict(type='mmdet.LoadImageFromFile', backend_args={{_base_.backend_args}}),
+    dict(type='mmdet.FixShapeResize', width=800, height=800, keep_ratio=True),
+    # avoid bboxes being resized
+    dict(type='mmdet.LoadAnnotations', with_bbox=True, box_type='qbox'),
+    dict(type='ConvertBoxType', box_type_mapping=dict(gt_bboxes='rbox')),
+    dict(
+        type='mmdet.PackDetInputs',
+        meta_keys=('img_id', 'img_path', 'ori_shape', 'img_shape',
+                   'scale_factor'))
+]
+
 train_dataloader = dict(batch_size=2,
                         dataset=dict(pipeline=train_pipeline))
+val_dataloader = dict(dataset=dict(pipeline=val_pipeline))
+test_dataloader = val_dataloader
+
+val_evaluator = dict(
+    type='DOTAMetric',
+    metric='mAP',
+    iou_thrs=[0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95])
 
 # e2e mode or pseudo generation mode. 
 e2e_test_mode = True
 if not e2e_test_mode:
-    test_dataloader = _base_.val_dataloader
     test_evaluator = dict(_delete_=True,
                         type='DOTAMetric',
                         metric='mAP',
                         format_only=True,
-                        outfile_prefix='data/split_ss_dota/point2rbox_v2_pseudo_labels')
+                        outfile_prefix='data/hrsc/point2rbox_v2_pseudo_labels')
 
 # optimizer
 optim_wrapper = dict(
@@ -103,5 +120,5 @@ optim_wrapper = dict(
         betas=(0.9, 0.999),
         weight_decay=0.05))
 
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=12, val_interval=12)
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=72, val_interval=12)
 custom_hooks = [dict(type='mmdet.SetEpochInfoHook')]
