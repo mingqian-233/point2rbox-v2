@@ -466,8 +466,8 @@ class Point2RBoxV2Head(AnchorFreeHead):
             sca = ss_info[1] if ss_info[0] == 'sca' else 1
             valid = torch.logical_and(valid, bbox_area > 24 ** 2)
             valid = torch.logical_and(valid, bbox_area * sca > 24 ** 2)
-            valid = torch.logical_and(valid, bbox_area < 320 ** 2)
-            valid = torch.logical_and(valid, bbox_area * sca < 320 ** 2)
+            valid = torch.logical_and(valid, bbox_area < 512 ** 2)
+            valid = torch.logical_and(valid, bbox_area * sca < 512 ** 2)
             
             if torch.any(valid):
                 ori_preds = pair_gaus_preds[valid, 0]

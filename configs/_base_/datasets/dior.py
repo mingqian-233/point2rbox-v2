@@ -1,6 +1,6 @@
 # dataset settings
 dataset_type = 'DIORDataset'
-data_root = 'data/DIOR/'
+data_root = 'data/dior/'
 backend_args = None
 
 train_pipeline = [

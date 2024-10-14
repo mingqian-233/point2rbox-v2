@@ -216,7 +216,14 @@ def gaussian_voronoi_watershed_loss(mu, sigma,
     # PyTorch does not support watershed, use cv2
     img_uint8 = (image - image.min()) / (image.max() - image.min()) * 255
     img_uint8 = img_uint8.permute(1, 2, 0).detach().cpu().numpy().astype(np.uint8)
+    # img_uint8 = cv2.resize(img_uint8, (img_uint8.shape[1] // 4, img_uint8.shape[0] // 4))
     img_uint8 = cv2.medianBlur(img_uint8, 3)
+    # img_uint8 = cv2.medianBlur(img_uint8, 3)
+    # img_uint8 = cv2.medianBlur(img_uint8, 3)
+    # img_uint8 = cv2.medianBlur(img_uint8, 3)
+    # img_uint8 = cv2.resize(img_uint8, (img_uint8.shape[1] * 4, img_uint8.shape[0] * 4))
+    # cv2.imshow('1.png', img_uint8)
+    # cv2.waitKey(100)
     markers = vor.detach().cpu().numpy().astype(np.int32)
     markers = vor.new_tensor(cv2.watershed(img_uint8, markers))
 

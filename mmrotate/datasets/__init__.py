@@ -8,9 +8,10 @@ from .diatom import DIATOMDataset
 from .sardet100k import SAR_Det_Finegrained_Dataset
 from .hrsc import HRSCDataset  # noqa: F401, F403
 from .transforms import *  # noqa: F401, F403
+from .sku110k_r import Sku110k_rDataset
 
 __all__ = [
     'DOTADataset', 'DOTAv15Dataset', 'DOTAv2Dataset', 'HRSCDataset',
     'DIORDataset', 'FAIRDataset', 'OCDPCBDataset', 'DIATOMDataset', 
-    'SAR_Det_Finegrained_Dataset', 'FAIRDOTADataset'
+    'SAR_Det_Finegrained_Dataset', 'FAIRDOTADataset', 'Sku110k_rDataset'
 ]

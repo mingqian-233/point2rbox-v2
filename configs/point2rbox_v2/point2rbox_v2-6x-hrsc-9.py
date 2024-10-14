@@ -58,7 +58,7 @@ model = dict(
         loss_voronoi=dict(
             type='GaussianVoronoiLoss', loss_weight=5.0),
         loss_bbox_edg=dict(
-            type='EdgeLoss', loss_weight=.3),
+            type='EdgeLoss', loss_weight=1.0),
         loss_bbox_syn=dict(
             type='RotatedIoULoss', loss_weight=1.0),
         loss_ss=dict(
@@ -101,19 +101,14 @@ val_pipeline = [
                    'scale_factor'))
 ]
 
-train_dataloader = dict(batch_size=4,
+train_dataloader = dict(batch_size=2,
                         dataset=dict(pipeline=train_pipeline))
 val_dataloader = dict(dataset=dict(pipeline=val_pipeline))
 test_dataloader = val_dataloader
 
 # e2e mode or pseudo generation mode. 
-e2e_test_mode = False
+e2e_test_mode = True
 if not e2e_test_mode:
-    test_dataloader = dict(
-        batch_size=8,
-        dataset=dict(
-            ann_file='ImageSets/trainval.txt',
-            pipeline=val_pipeline))
     test_evaluator = dict(_delete_=True,
                         type='DOTAMetric',
                         metric='mAP',

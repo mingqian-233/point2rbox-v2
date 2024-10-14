@@ -38,6 +38,7 @@ model = dict(
         in_channels=128,
         feat_channels=128,
         strides=[8],
+        voronoi_type='standard',
         square_cls=[1, 9, 11, 16, 17],
         loss_cls=dict(
             type='mmdet.FocalLoss',
