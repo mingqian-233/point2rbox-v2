@@ -118,9 +118,10 @@ class Point2RBoxV2(SingleStageDetector):
                  neck: ConfigType,
                  bbox_head: ConfigType,
                  view_range: Tuple[float, float] = (0.25, 0.75),
-                 ss_prob: float = [0.6, 0.15, 0.3],
+                 ss_prob: float = [0.6, 0.15, 0.25],
                  copy_paste_start_epoch: int = 6,
                  num_copies: int = 10,
+                 debug: bool = False,
                  train_cfg: OptConfigType = None,
                  test_cfg: OptConfigType = None,
                  data_preprocessor: OptConfigType = None,
@@ -138,6 +139,7 @@ class Point2RBoxV2(SingleStageDetector):
         self.ss_prob = ss_prob
         self.copy_paste_start_epoch = copy_paste_start_epoch
         self.num_copies = num_copies
+        self.debug = debug
         self.copy_paste_cache = None
 
         self.ted_model = TED()
@@ -349,7 +351,7 @@ class Point2RBoxV2(SingleStageDetector):
                                                                   self.bbox_head.square_cls,
                                                                   self.num_copies))
                 
-        if np.random.rand() < 0.000:
+        if self.debug:
             for i in range(len(batch_inputs_all)):
                 img = batch_inputs_all[i]
                 if self.bbox_head.vis[i]:
