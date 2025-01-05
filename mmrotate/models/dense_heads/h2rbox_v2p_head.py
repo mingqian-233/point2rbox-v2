@@ -84,12 +84,11 @@ class H2RBoxV2PHead(RotatedFCOSHead):
                  loss_symmetry_ss: ConfigType = dict(
                      type='mmdet.SmoothL1Loss', loss_weight=1.0, beta=0.1),
                  rotation_agnostic_classes: list = None,
-                 agnostic_resize_classes: list = None,
                  use_circumiou_loss=True,
                  use_standalone_angle=True,
                  use_snap_loss=True,
                  use_reweighted_loss_bbox=False,
-                 post_refine=None,
+                 post_process={},
                  **kwargs):
         super().__init__(
             num_classes=num_classes,
@@ -109,12 +108,11 @@ class H2RBoxV2PHead(RotatedFCOSHead):
         self.loss_hbox = MODELS.build(loss_hbox)
         self.loss_symmetry_ss = MODELS.build(loss_symmetry_ss)
         self.rotation_agnostic_classes = rotation_agnostic_classes
-        self.agnostic_resize_classes = agnostic_resize_classes
         self.use_circumiou_loss = use_circumiou_loss
         self.use_standalone_angle = use_standalone_angle
         self.use_snap_loss = use_snap_loss
         self.use_reweighted_loss_bbox = use_reweighted_loss_bbox
-        self.post_refine = post_refine
+        self.post_process = post_process
 
     def nested_projection(self, pred, target):
         target_xy1 = target[..., 0:2] - target[..., 2:4] / 2
@@ -189,7 +187,7 @@ class H2RBoxV2PHead(RotatedFCOSHead):
             device=bbox_preds[0].device)
         # bbox_targets here is in format t,b,l,r
         # angle_targets is not coded here
-        labels, bbox_targets, angle_targets, bid_targets, ws_targets = self.get_targets(
+        labels, bbox_targets, angle_targets, bids = self.get_targets(
             all_level_points, batch_gt_instances)
 
         num_imgs = cls_scores[0].size(0)
@@ -215,11 +213,11 @@ class H2RBoxV2PHead(RotatedFCOSHead):
         flatten_bbox_preds = torch.cat(flatten_bbox_preds)
         flatten_angle_preds = torch.cat(flatten_angle_preds)
         flatten_centerness = torch.cat(flatten_centerness)
-        flatten_labels = torch.cat(labels)
+        flatten_labels = torch.cat(labels)[:, 0]
+        flatten_ws = torch.cat(labels)[:, 1]
         flatten_bbox_targets = torch.cat(bbox_targets)
         flatten_angle_targets = torch.cat(angle_targets)
-        flatten_bid_targets = torch.cat(bid_targets)
-        flatten_ws_targets = torch.cat(ws_targets)
+        flatten_bids = torch.cat(bids)
         # repeat points to align with bbox_preds
         flatten_points = torch.cat(
             [points.repeat(num_imgs, 1) for points in all_level_points])
@@ -239,8 +237,8 @@ class H2RBoxV2PHead(RotatedFCOSHead):
         pos_centerness = flatten_centerness[pos_inds]
         pos_bbox_targets = flatten_bbox_targets[pos_inds]
         pos_angle_targets = flatten_angle_targets[pos_inds]
-        pos_bid_targets = flatten_bid_targets[pos_inds]
-        pos_ws_targets = flatten_ws_targets[pos_inds]
+        pos_bids = flatten_bids[pos_inds]
+        pos_ws = flatten_ws[pos_inds]
         pos_centerness_targets = self.centerness_target(pos_bbox_targets)
         # centerness weighted iou loss
         centerness_denorm = max(
@@ -275,32 +273,30 @@ class H2RBoxV2PHead(RotatedFCOSHead):
             # HBB-supervision
             if self.use_circumiou_loss:
                 # Works with random rotation where targets are OBBs
-                h_mask = pos_ws_targets >= 1
                 loss_hbox = self.loss_hbox(
                     *self.nested_projection(pos_decoded_bbox_preds,
                                             pos_decoded_bbox_targets),
-                    weight=pos_centerness_targets * h_mask,
+                    weight=pos_centerness_targets * (pos_ws >= 1),
                     avg_factor=centerness_denorm)
-                r_mask = pos_ws_targets == 0
-                loss_bbox = loss_hbox + self.loss_bbox(
+                loss_bbox = self.loss_bbox(
                     pos_decoded_bbox_preds,
                     pos_decoded_bbox_targets,
-                    weight=pos_centerness_targets * r_mask,
+                    weight=pos_centerness_targets * (pos_ws == 0),
                     avg_factor=centerness_denorm)
 
             loss_centerness = self.loss_centerness(
                 pos_centerness, pos_centerness_targets, avg_factor=num_pos)
 
             # Self-supervision
-            # Aggregate targets of the same bbox based on their identical bid
-            bid, idx = torch.unique(pos_bid_targets, return_inverse=True)
-            compacted_bid_targets = torch.empty_like(bid).index_reduce_(
-                0, idx, pos_bid_targets, 'mean', include_self=False)
+            # Aggregate targets of the same bbox based on their identical bids
+            bid, idx = torch.unique(pos_bids, return_inverse=True)
+            compacted_bids = torch.empty_like(bid).index_reduce_(
+                0, idx, pos_bids, 'mean', include_self=False)
             
             # Generate a mask to eliminate bboxes without correspondence
             # (bcnt is supposed to be 3, for ori, rot, and flp)
             _, bidx, bcnt = torch.unique(
-                compacted_bid_targets.long(),
+                compacted_bids.long(),
                 return_inverse=True,
                 return_counts=True)
             bmsk = bcnt[bidx] == 2
@@ -335,19 +331,19 @@ class H2RBoxV2PHead(RotatedFCOSHead):
                 d_ang = (d_ang + math.pi / 2) % math.pi - math.pi / 2
             d_ang[square_mask] = 0
             loss_symmetry_ss = self.loss_symmetry_ss(d_ang, torch.zeros_like(d_ang))
-            if ss_info[0] == 'flp':
-                loss_symmetry_ss = 0.1 * loss_symmetry_ss
 
             if self.use_reweighted_loss_bbox:
-                loss_bbox = math.exp(-loss_symmetry_ss.item()) * loss_bbox
+                loss_hbox = math.exp(-loss_symmetry_ss.item()) * loss_hbox
         else:
             loss_bbox = pos_bbox_preds.sum()
+            loss_hbox = pos_bbox_preds.sum()
             loss_centerness = pos_centerness.sum()
             loss_symmetry_ss = pos_angle_preds.sum()
 
         return dict(
             loss_cls=loss_cls,
             loss_bbox=loss_bbox,
+            loss_hbox=loss_hbox,
             loss_centerness=loss_centerness,
             loss_symmetry_ss=loss_symmetry_ss)
 
@@ -386,7 +382,7 @@ class H2RBoxV2PHead(RotatedFCOSHead):
 
         # get labels and bbox_targets of each image
         labels_list, bbox_targets_list, angle_targets_list, \
-            id_targets_list, ws_targets_list = multi_apply(
+            id_targets_list = multi_apply(
                 self._get_targets_single,
                 batch_gt_instances,
                 points=concat_points,
@@ -406,16 +402,12 @@ class H2RBoxV2PHead(RotatedFCOSHead):
         id_targets_list = [
             id_targets.split(num_points, 0) for id_targets in id_targets_list
         ]
-        ws_targets_list = [
-            ws_targets.split(num_points, 0) for ws_targets in ws_targets_list
-        ]
 
         # concat per level image
         concat_lvl_labels = []
         concat_lvl_bbox_targets = []
         concat_lvl_angle_targets = []
         concat_lvl_id_targets = []
-        concat_lvl_ws_targets = []
         for i in range(num_levels):
             concat_lvl_labels.append(
                 torch.cat([labels[i] for labels in labels_list]))
@@ -425,16 +417,13 @@ class H2RBoxV2PHead(RotatedFCOSHead):
                 [angle_targets[i] for angle_targets in angle_targets_list])
             id_targets = torch.cat(
                 [id_targets[i] for id_targets in id_targets_list])
-            ws_targets = torch.cat(
-                [ws_targets[i] for ws_targets in ws_targets_list])
             if self.norm_on_bbox:
                 bbox_targets = bbox_targets / self.strides[i]
             concat_lvl_bbox_targets.append(bbox_targets)
             concat_lvl_angle_targets.append(angle_targets)
             concat_lvl_id_targets.append(id_targets)
-            concat_lvl_ws_targets.append(ws_targets)
         return (concat_lvl_labels, concat_lvl_bbox_targets,
-                concat_lvl_angle_targets, concat_lvl_id_targets, concat_lvl_ws_targets)
+                concat_lvl_angle_targets, concat_lvl_id_targets)
 
     def _get_targets_single(
             self, gt_instances: InstanceData, points: Tensor,
@@ -445,15 +434,13 @@ class H2RBoxV2PHead(RotatedFCOSHead):
         num_gts = len(gt_instances)
         gt_bboxes = gt_instances.bboxes
         gt_labels = gt_instances.labels
-        gt_bid = gt_instances.bid
-        gt_ws = gt_instances.ws
+        gt_bids = gt_instances.bids
 
         if num_gts == 0:
-            return gt_labels.new_full((num_points,), self.num_classes), \
+            return gt_labels.new_full((num_points, 2), self.num_classes), \
                    gt_bboxes.new_zeros((num_points, 4)), \
                    gt_bboxes.new_zeros((num_points, 1)), \
-                   gt_bboxes.new_zeros((num_points,)),\
-                   gt_bboxes.new_zeros((num_points,))
+                   gt_bboxes.new_zeros((num_points,)),
 
         areas = gt_bboxes.areas
         gt_bboxes = gt_bboxes.regularize_boxes(self.angle_version)
@@ -520,10 +507,9 @@ class H2RBoxV2PHead(RotatedFCOSHead):
         labels[min_area == INF] = self.num_classes  # set as BG
         bbox_targets = bbox_targets[range(num_points), min_area_inds]
         angle_targets = gt_angle[range(num_points), min_area_inds]
-        bid_targets = gt_bid[min_area_inds]
-        ws_targets = gt_ws[min_area_inds]
+        bids = gt_bids[min_area_inds]
 
-        return labels, bbox_targets, angle_targets, bid_targets, ws_targets
+        return labels, bbox_targets, angle_targets, bids
 
     def _predict_by_feat_single(self,
                                 cls_score_list: List[Tensor],
@@ -650,29 +636,18 @@ class H2RBoxV2PHead(RotatedFCOSHead):
         bbox_pred = torch.cat(mlvl_bbox_preds)
         priors = cat_boxes(mlvl_valid_priors)
         bboxes = self.bbox_coder.decode(priors, bbox_pred, max_shape=img_shape)
+        labels = torch.cat(mlvl_labels)
+        for id in self.post_process.keys():
+            bboxes[labels == id, 2:4] *= self.post_process[id]
+        for id in self.rotation_agnostic_classes:
+            bboxes[labels == id, -1] = 0
         
         results = InstanceData()
         results.bboxes = RotatedBoxes(bboxes)
         results.scores = torch.cat(mlvl_scores)
-        results.labels = torch.cat(mlvl_labels)
+        results.labels = labels
         if with_score_factors:
             results.score_factors = torch.cat(mlvl_score_factors)
-
-        if self.rotation_agnostic_classes:
-            bboxes = get_box_tensor(results.bboxes)
-            for id in self.rotation_agnostic_classes:
-                bboxes[results.labels == id, -1] = 0
-            if self.agnostic_resize_classes:
-                for id in self.agnostic_resize_classes:
-                    bboxes[results.labels == id, 2:4] *= 0.85
-            results.bboxes = RotatedBoxes(bboxes)
-        
-        if self.post_refine:
-            bboxes = results.bboxes.regularize_boxes('le90')
-            for pr in self.post_refine:
-                bboxes[results.labels == pr[0], 2] *= pr[1]
-                bboxes[results.labels == pr[0], 3] *= pr[2]
-            results.bboxes = RotatedBoxes(bboxes)
 
         results = self._bbox_post_process(
             results=results,

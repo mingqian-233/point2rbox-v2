@@ -1,4 +1,5 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,7 +8,47 @@ import numpy as np
 from mmdet.models.losses.utils import weighted_loss
 
 from mmrotate.registry import MODELS
-from mmrotate.models.losses.gaussian_dist_loss import gwd_loss
+from mmrotate.models.losses.gaussian_dist_loss import postprocess
+
+
+@weighted_loss
+def gwd_sigma_loss(pred, target, fun='log1p', tau=1.0, alpha=1.0, normalize=True):
+    """Gaussian Wasserstein distance loss.
+    Modified from gwd_loss. 
+    gwd_sigma_loss only involves sigma in Gaussian, with mu ignored.
+
+    Args:
+        pred (torch.Tensor): Predicted bboxes.
+        target (torch.Tensor): Corresponding gt bboxes.
+        fun (str): The function applied to distance. Defaults to 'log1p'.
+        tau (float): Defaults to 1.0.
+        alpha (float): Defaults to 1.0.
+        normalize (bool): Whether to normalize the distance. Defaults to True.
+
+    Returns:
+        loss (torch.Tensor)
+
+    """
+    Sigma_p = pred
+    Sigma_t = target
+
+    whr_distance = Sigma_p.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+    whr_distance = whr_distance + Sigma_t.diagonal(
+        dim1=-2, dim2=-1).sum(dim=-1)
+
+    _t_tr = (Sigma_p.bmm(Sigma_t)).diagonal(dim1=-2, dim2=-1).sum(dim=-1)
+    _t_det_sqrt = (Sigma_p.det() * Sigma_t.det()).clamp(1e-7).sqrt()
+    whr_distance = whr_distance + (-2) * (
+        (_t_tr + 2 * _t_det_sqrt).clamp(1e-7).sqrt())
+
+    distance = (alpha * alpha * whr_distance).clamp(1e-7).sqrt()
+
+    if normalize:
+        scale = 2 * (
+            _t_det_sqrt.clamp(1e-7).sqrt().clamp(1e-7).sqrt()).clamp(1e-7)
+        distance = distance / scale
+
+    return postprocess(distance, fun=fun, tau=tau)
 
 
 def bhattacharyya_coefficient(pred, target):
@@ -46,7 +87,7 @@ def bhattacharyya_coefficient(pred, target):
 
 
 @weighted_loss
-def gaussian_overlap_loss(pred, target, alpha=0.1, beta=0.6065):
+def gaussian_overlap_loss(pred, target, alpha=0.01, beta=0.6065):
     """Calculate Gaussian overlap loss based on bhattacharyya coefficient.
 
     Args:
@@ -68,6 +109,7 @@ def gaussian_overlap_loss(pred, target, alpha=0.1, beta=0.6065):
     loss = bhattacharyya_coefficient((mu0, sigma0), (mu1, sigma1))
     loss[torch.eye(B, dtype=bool)] = 0
     loss = F.leaky_relu(loss - beta, negative_slope=alpha) + beta * alpha
+    loss = loss.sum(-1)
     return loss
 
 
@@ -87,10 +129,12 @@ class GaussianOverlapLoss(nn.Module):
 
     def __init__(self,
                  reduction='mean',
-                 loss_weight=1.0):
+                 loss_weight=1.0,
+                 lamb=1e-4):
         super(GaussianOverlapLoss, self).__init__()
         self.reduction = reduction
         self.loss_weight = loss_weight
+        self.lamb = lamb
 
     def forward(self,
                 pred,
@@ -121,12 +165,17 @@ class GaussianOverlapLoss(nn.Module):
             reduction_override if reduction_override else self.reduction)
         assert len(pred[0]) == len(pred[1])
 
-        return self.loss_weight * gaussian_overlap_loss(
+        sigma = pred[1]
+        L = torch.linalg.eigh(sigma)[0].clamp(1e-7).sqrt()
+        loss_lamb = F.l1_loss(L, torch.zeros_like(L), reduction='none')
+        loss_lamb = self.lamb * loss_lamb.log1p().mean()
+        
+        return self.loss_weight * (loss_lamb + gaussian_overlap_loss(
             pred,
             None,
             weight,
             reduction=reduction,
-            avg_factor=avg_factor)
+            avg_factor=avg_factor))
 
 
 def plot_gaussian_voronoi_watershed(*images):
@@ -142,7 +191,14 @@ def plot_gaussian_voronoi_watershed(*images):
             img = img.permute(1, 2, 0)
         img = img.detach().cpu().numpy()
         plt.subplot(1, len(images), i + 1)
-        plt.imshow(img)
+        if i == 3:
+            plt.imshow(img)
+            x = np.linspace(0, 1024, 1024)
+            y = np.linspace(0, 1024, 1024)
+            X, Y = np.meshgrid(x, y)
+            plt.contourf(X, Y, img, levels=8, cmap=plt.get_cmap('magma'))
+        else:
+            plt.imshow(img)
         plt.xticks([])
         plt.yticks([])
     plt.savefig(f'debug/Gaussian-Voronoi-{fileid}.png')
@@ -157,12 +213,14 @@ def gaussian_2d(xy, mu, sigma, normalize=False):
     return t0
 
 
-def gaussian_voronoi_watershed_loss(mu, sigma, 
+def gaussian_voronoi_watershed_loss(mu, sigma,
                                     label, image, 
                                     pos_thres, neg_thres, 
                                     down_sample=2, topk=0.95, 
                                     default_sigma=4096,
-                                    voronoi='gaussian-orientation'):
+                                    voronoi='gaussian-orientation',
+                                    alpha=0.1,
+                                    debug=False):
     J = len(sigma)
     if J == 0:
         return sigma.sum()
@@ -216,19 +274,12 @@ def gaussian_voronoi_watershed_loss(mu, sigma,
     # PyTorch does not support watershed, use cv2
     img_uint8 = (image - image.min()) / (image.max() - image.min()) * 255
     img_uint8 = img_uint8.permute(1, 2, 0).detach().cpu().numpy().astype(np.uint8)
-    # img_uint8 = cv2.resize(img_uint8, (img_uint8.shape[1] // 4, img_uint8.shape[0] // 4))
     img_uint8 = cv2.medianBlur(img_uint8, 3)
-    # img_uint8 = cv2.medianBlur(img_uint8, 3)
-    # img_uint8 = cv2.medianBlur(img_uint8, 3)
-    # img_uint8 = cv2.medianBlur(img_uint8, 3)
-    # img_uint8 = cv2.resize(img_uint8, (img_uint8.shape[1] * 4, img_uint8.shape[0] * 4))
-    # cv2.imshow('1.png', img_uint8)
-    # cv2.waitKey(100)
     markers = vor.detach().cpu().numpy().astype(np.int32)
     markers = vor.new_tensor(cv2.watershed(img_uint8, markers))
 
-    # if np.random.rand() < 0.002:
-    #     plot_gaussian_voronoi_watershed(image, cls_bg, markers)
+    if debug:
+        plot_gaussian_voronoi_watershed(image, cls_bg, markers)
 
     L, V = torch.linalg.eigh(sigma)
     L_target = []
@@ -241,19 +292,17 @@ def gaussian_voronoi_watershed_loss(mu, sigma,
         xy = V[j].T.matmul(xy[:, :, None])[:, :, 0]
         max_x = torch.max(torch.abs(xy[:, 0]))
         max_y = torch.max(torch.abs(xy[:, 1]))
-        L_target.append(torch.stack((max_x ** 2, max_y ** 2)))
+        L_target.append(torch.stack((max_x, max_y)) ** 2)
     L_target = torch.stack(L_target)
-    # mask = L_target < L
-    # L_target[mask] = L[mask]
     L = torch.diag_embed(L)
     L_target = torch.diag_embed(L_target)
-    loss = gwd_loss((None, L), (None, L_target.detach()), reduction='none')
+    loss = gwd_sigma_loss(L, L_target.detach(), reduction='none')
     loss = torch.topk(loss, int(np.ceil(len(loss) * topk)), largest=False)[0].mean()
     return loss, (vor, markers)
 
 
 @MODELS.register_module()
-class GaussianVoronoiLoss(nn.Module):
+class VoronoiWatershedLoss(nn.Module):
     """Gaussian Overlap Loss.
 
     Args:
@@ -269,11 +318,17 @@ class GaussianVoronoiLoss(nn.Module):
     def __init__(self,
                  down_sample=2,
                  reduction='mean',
-                 loss_weight=1.0):
-        super(GaussianVoronoiLoss, self).__init__()
+                 loss_weight=1.0,
+                 topk=0.95,
+                 alpha=0.1,
+                 debug=False):
+        super(VoronoiWatershedLoss, self).__init__()
         self.down_sample = down_sample
         self.reduction = reduction
         self.loss_weight = loss_weight
+        self.topk = topk
+        self.alpha = alpha
+        self.debug = debug
 
     def forward(self, pred, label, image, pos_thres, neg_thres, voronoi='orientation'):
         """Forward function.
@@ -296,8 +351,10 @@ class GaussianVoronoiLoss(nn.Module):
                                                pos_thres, 
                                                neg_thres, 
                                                self.down_sample, 
-                                               topk=0.95,
-                                               voronoi=voronoi)
+                                               topk=self.topk,
+                                               voronoi=voronoi,
+                                               alpha=self.alpha,
+                                               debug=self.debug)
         return self.loss_weight * loss
 
 
@@ -338,8 +395,8 @@ def plot_edge_map(feat, edgex, edgey):
         img2 = (img2 - img2.min()) / (img2.max() - img2.min())
         img3 = img1 + img2
         img3 = (img3 - img3.min()) / (img3.max() - img3.min())
-        img = torch.cat((torch.cat((img0, img1), -1), 
-                         torch.cat((img2, img3), -1)), -2
+        img = torch.cat((torch.cat((img0, img2), -1), 
+                         torch.cat((img1, img3), -1)), -2
                          ).permute(1, 2, 0).detach().cpu().numpy()
         N = int(np.ceil(np.sqrt(len(feat))))
         plt.subplot(N, N, i + 1)
@@ -369,7 +426,8 @@ class EdgeLoss(nn.Module):
                  max_scale=1.6,
                  sigma=6,
                  reduction='mean',
-                 loss_weight=1.0):
+                 loss_weight=1.0,
+                 debug=False):
         super(EdgeLoss, self).__init__()
         self.resolution = resolution
         self.max_scale = max_scale
@@ -377,6 +435,7 @@ class EdgeLoss(nn.Module):
         self.reduction = reduction
         self.loss_weight = loss_weight
         self.center_idx = self.resolution / self.max_scale
+        self.debug = debug
 
         self.roi_extractor = MODELS.build(dict(
             type='RotatedSingleRoIExtractor',
@@ -421,11 +480,71 @@ class EdgeLoss(nn.Module):
         exy = torch.stack((ex, ey), -1)
         rbbox_concat = torch.cat(pred, 0)
         
-        # if np.random.rand() < 0.005:
-        #     edgex = featx[:, None, None, :].expand(-1, 1, 2 * self.resolution + 1, -1)
-        #     edgey = featy[:, None, :, None].expand(-1, 1, -1, 2 * self.resolution + 1)
-        #     plot_edge_map(feat, edgex, edgey)
+        if self.debug:
+            edgex = featx[:, None, None, :].expand(-1, 1, 2 * self.resolution + 1, -1)
+            edgey = featy[:, None, :, None].expand(-1, 1, -1, 2 * self.resolution + 1)
+            plot_edge_map(feat, edgex, edgey)
 
         return self.loss_weight * F.smooth_l1_loss(rbbox_concat[:, 2:4], 
                                       (rbbox_concat[:, 2:4] * exy).detach(),
                                       beta=8)
+
+
+@MODELS.register_module()
+class Point2RBoxV2ConsistencyLoss(nn.Module):
+    """Consistency Loss.
+
+    Args:
+        reduction (str, optional): The method used to reduce the loss into
+            a scalar. Defaults to 'mean'. Options are "none", "mean" and
+            "sum".
+        loss_weight (float, optional): Weight of loss. Defaults to 1.0.
+
+    Returns:
+        loss (torch.Tensor)
+    """
+
+    def __init__(self,
+                 reduction='mean',
+                 loss_weight=1.0):
+        super(Point2RBoxV2ConsistencyLoss, self).__init__()
+        self.reduction = reduction
+        self.loss_weight = loss_weight
+
+    def forward(self, ori_pred, trs_pred, square_mask, aug_type, aug_val):
+        """Forward function.
+
+        Args:
+            ori_pred (Tuple): (Sigma, theta)
+            trs_pred (Tuple): (Sigma, theta)
+            square_mask: When True, the angle is ignored
+            aug_type: 'rot', 'flp', 'sca'
+            aug_val: Rotation or scale value
+
+        Returns:
+            torch.Tensor: The calculated loss
+        """
+        ori_gaus, ori_angle = ori_pred
+        trs_gaus, trs_angle = trs_pred
+
+        if aug_type == 'rot':
+            rot = ori_gaus.new_tensor(aug_val)
+            cos_r = torch.cos(rot)
+            sin_r = torch.sin(rot)
+            R = torch.stack((cos_r, -sin_r, sin_r, cos_r), dim=-1).reshape(-1, 2, 2)
+            ori_gaus = R.matmul(ori_gaus).matmul(R.permute(0, 2, 1))
+            d_ang = trs_angle - ori_angle - aug_val
+        elif aug_type == 'flp':
+            ori_gaus = ori_gaus * ori_gaus.new_tensor((1, -1, -1, 1)).reshape(2, 2)
+            d_ang = trs_angle + ori_angle
+        else:
+            sca = ori_gaus.new_tensor(aug_val)
+            ori_gaus = ori_gaus * sca
+            d_ang = trs_angle - ori_angle
+        
+        loss_ssg = gwd_sigma_loss(ori_gaus.bmm(ori_gaus), trs_gaus.bmm(trs_gaus))
+        d_ang = (d_ang + math.pi / 2) % math.pi - math.pi / 2
+        loss_ssa = F.smooth_l1_loss(d_ang, torch.zeros_like(d_ang), reduction='none', beta=0.1)
+        loss_ssa = loss_ssa[~square_mask].sum() / max(1, (~square_mask).sum())
+
+        return self.loss_weight * (loss_ssg + loss_ssa)

@@ -32,8 +32,6 @@ def xy_wh_r_2_xy_sigma(xywhr):
 
     sigma = R.bmm(S.square()).bmm(R.permute(0, 2,
                                             1)).reshape(_shape[:-1] + (2, 2))
-    # sigma = R.bmm(S).bmm(R.permute(0, 2,
-    #                                         1)).reshape(_shape[:-1] + (2, 2))
 
     return xy, sigma
 
@@ -134,7 +132,7 @@ def gwd_loss(pred, target, fun='log1p', tau=1.0, alpha=1.0, normalize=True):
     xy_p, Sigma_p = pred
     xy_t, Sigma_t = target
 
-    # xy_distance = (xy_p - xy_t).square().sum(dim=-1)
+    xy_distance = (xy_p - xy_t).square().sum(dim=-1)
 
     whr_distance = Sigma_p.diagonal(dim1=-2, dim2=-1).sum(dim=-1)
     whr_distance = whr_distance + Sigma_t.diagonal(
@@ -145,8 +143,7 @@ def gwd_loss(pred, target, fun='log1p', tau=1.0, alpha=1.0, normalize=True):
     whr_distance = whr_distance + (-2) * (
         (_t_tr + 2 * _t_det_sqrt).clamp(1e-7).sqrt())
 
-    # distance = (xy_distance + alpha * alpha * whr_distance).clamp(1e-7).sqrt()
-    distance = (alpha * alpha * whr_distance).clamp(1e-7).sqrt()
+    distance = (xy_distance + alpha * alpha * whr_distance).clamp(1e-7).sqrt()
 
     if normalize:
         scale = 2 * (
@@ -174,10 +171,10 @@ def kld_loss(pred, target, fun='log1p', tau=1.0, alpha=1.0, sqrt=True):
     xy_p, Sigma_p = pred
     xy_t, Sigma_t = target
 
-    _shape = Sigma_p.shape
+    _shape = xy_p.shape
 
-    # xy_p = xy_p.reshape(-1, 2)
-    # xy_t = xy_t.reshape(-1, 2)
+    xy_p = xy_p.reshape(-1, 2)
+    xy_t = xy_t.reshape(-1, 2)
     Sigma_p = Sigma_p.reshape(-1, 2, 2)
     Sigma_t = Sigma_t.reshape(-1, 2, 2)
 
@@ -186,8 +183,8 @@ def kld_loss(pred, target, fun='log1p', tau=1.0, alpha=1.0, sqrt=True):
                               dim=-1).reshape(-1, 2, 2)
     Sigma_p_inv = Sigma_p_inv / Sigma_p.det().unsqueeze(-1).unsqueeze(-1)
 
-    # dxy = (xy_p - xy_t).unsqueeze(-1)
-    # xy_distance = 0.5 * dxy.permute(0, 2, 1).bmm(Sigma_p_inv).bmm(dxy).view(-1)
+    dxy = (xy_p - xy_t).unsqueeze(-1)
+    xy_distance = 0.5 * dxy.permute(0, 2, 1).bmm(Sigma_p_inv).bmm(dxy).view(-1)
 
     whr_distance = 0.5 * Sigma_p_inv.bmm(Sigma_t).diagonal(
         dim1=-2, dim2=-1).sum(dim=-1)
@@ -196,12 +193,11 @@ def kld_loss(pred, target, fun='log1p', tau=1.0, alpha=1.0, sqrt=True):
     Sigma_t_det_log = Sigma_t.det().log()
     whr_distance = whr_distance + 0.5 * (Sigma_p_det_log - Sigma_t_det_log)
     whr_distance = whr_distance - 1
-    # distance = (xy_distance / (alpha * alpha) + whr_distance)
-    distance = whr_distance
+    distance = (xy_distance / (alpha * alpha) + whr_distance)
     if sqrt:
         distance = distance.clamp(1e-7).sqrt()
 
-    distance = distance.reshape(_shape[:-2])
+    distance = distance.reshape(_shape[:-1])
 
     return postprocess(distance, fun=fun, tau=tau)
 

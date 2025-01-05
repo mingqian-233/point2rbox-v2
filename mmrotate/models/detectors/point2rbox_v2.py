@@ -4,27 +4,21 @@ import math
 import cv2
 import numpy as np
 from typing import Tuple, Union
-import matplotlib.pyplot as plt
 
 import torch
 from torch import Tensor
 import torch.nn.functional as F
 from torch.nn.functional import grid_sample
-from torch import multiprocessing
 from torchvision import transforms
 
 from mmdet.models.detectors.single_stage import SingleStageDetector
-from mmdet.datasets.transforms import CopyPaste
 from mmdet.models.utils import unpack_gt_instances
 from mmdet.structures import DetDataSample, SampleList
 from mmdet.structures.bbox import get_box_tensor
 from mmdet.utils import ConfigType, InstanceList, OptConfigType, OptMultiConfig
-from mmengine.model import BaseModule
 from mmengine.structures import InstanceData
 from mmrotate.registry import MODELS
 from mmrotate.structures.bbox import RotatedBoxes, rbox2hbox, hbox2rbox
-from mmrotate.models.task_modules.synthesis_generators import \
-    point2rbox_generator
 
 from third_parties.ted.ted import TED
 
@@ -117,7 +111,8 @@ class Point2RBoxV2(SingleStageDetector):
                  backbone: ConfigType,
                  neck: ConfigType,
                  bbox_head: ConfigType,
-                 view_range: Tuple[float, float] = (0.25, 0.75),
+                 rotate_range: Tuple[float, float] = (0.25, 0.75),
+                 scale_range: Tuple[float, float] = (0.5, 0.9),
                  ss_prob: float = [0.6, 0.15, 0.25],
                  copy_paste_start_epoch: int = 6,
                  num_copies: int = 10,
@@ -135,7 +130,8 @@ class Point2RBoxV2(SingleStageDetector):
             data_preprocessor=data_preprocessor,
             init_cfg=init_cfg)
 
-        self.view_range = view_range
+        self.rotate_range = rotate_range
+        self.scale_range = scale_range
         self.ss_prob = ss_prob
         self.copy_paste_start_epoch = copy_paste_start_epoch
         self.num_copies = num_copies
@@ -253,7 +249,7 @@ class Point2RBoxV2(SingleStageDetector):
             # Generate rotated images and gts
             rot = math.pi * (
                 torch.rand(1).item() *
-                (self.view_range[1] - self.view_range[0]) + self.view_range[0])
+                (self.rotate_range[1] - self.rotate_range[0]) + self.rotate_range[0])
             for img_metas in batch_img_metas:
                 img_metas['ss'] = ('rot', rot)
             # batch_inputs_aug = transforms.functional.rotate(batch_inputs, -rot / math.pi * 180)
@@ -275,7 +271,6 @@ class Point2RBoxV2(SingleStageDetector):
                 gt_instances.bids[:, 2] = 1
         else:
             # Generate scaled images and gts
-            self.scale_range = [0.5, 0.9]
             sca = (torch.rand(1).item() *
                 (self.scale_range[1] - self.scale_range[0]) + self.scale_range[0])
             for img_metas in batch_img_metas:
@@ -292,11 +287,11 @@ class Point2RBoxV2(SingleStageDetector):
         # Edge
         if self.epoch >= self.bbox_head.edge_loss_start_epoch:
             with torch.no_grad():
-                mean = batch_inputs_all.new_tensor([123.675, 116.28, 103.53])[..., None, None]
-                std = batch_inputs_all.new_tensor([58.395, 57.12, 57.375])[..., None, None]
+                mean = self.data_preprocessor.mean
+                std = self.data_preprocessor.std
                 batch_edges = self.ted_model(batch_inputs_all * std + mean)
-                self.bbox_head.edges = batch_edges[3]
-                # cv2.imwrite('E.png', batch_edges[0].cpu().numpy() * 255)
+                self.bbox_head.edges = batch_edges[3].clamp(0)
+                # cv2.imwrite('E.png', self.bbox_head.edges[0, 0].cpu().numpy() * 255)
 
         if self.copy_paste_cache and len(batch_gt_aug) == len(self.copy_paste_cache):
             for i in range(len(batch_gt_aug)):
@@ -352,6 +347,29 @@ class Point2RBoxV2(SingleStageDetector):
                                                                   self.num_copies))
                 
         if self.debug:
+            def plot_one_rotated_box(img,
+                                    obb,
+                                    color=[0.0, 0.0, 128],
+                                    label=None,
+                                    line_thickness=None):
+                width, height, theta = obb[2], obb[3], obb[4] / np.pi * 180
+                if theta < 0:
+                    width, height, theta = height, width, theta + 90
+                rect = [(obb[0], obb[1]), (width, height), theta]
+                poly = np.intp(np.round(
+                    cv2.boxPoints(rect)))  # [(x1, y1), (x2, y2), (x3, y3), (x4, y4)]
+                cv2.drawContours(
+                    image=img, contours=[poly], contourIdx=-1, color=color, thickness=2)
+                c1 = (int(obb[0]), int(obb[1]))
+                if label:
+                    tl = 2
+                    tf = max(tl - 1, 1)  # font thickness
+                    t_size = cv2.getTextSize(label, 0, fontScale=tl / 3, thickness=tf)[0]
+                    c2 = c1[0] + t_size[0], c1[1] - t_size[1] - 3
+                    cv2.rectangle(img, c1, c2, color, -1, cv2.LINE_AA)
+                    textcolor = [0, 0, 0] if max(color) > 192 else [255, 255, 255]
+                    cv2.putText(img, label, (c1[0], c1[1] - 2), 0, tl / 3, textcolor, thickness=tf, lineType=cv2.LINE_AA)
+
             for i in range(len(batch_inputs_all)):
                 img = batch_inputs_all[i]
                 if self.bbox_head.vis[i]:
@@ -364,15 +382,15 @@ class Point2RBoxV2(SingleStageDetector):
                 ll = batch_data_samples_all[i].gt_instances.labels
                 for b, l in zip(bb.cpu().numpy(), ll.cpu().numpy()):
                     b[2:4] = b[2:4].clip(3)
-                    point2rbox_generator.plot_one_rotated_box(img, b)
+                    plot_one_rotated_box(img, b)
                 if i < len(results_list):
                     bb = results_list[i].bboxes.tensor
                     if hasattr(results_list[i], 'informs'):
                         for b, l in zip(bb.cpu().numpy(), results_list[i].infoms.cpu().numpy()):
-                            point2rbox_generator.plot_one_rotated_box(img, b, (0, 255, 0), label=f'{l}')
+                            plot_one_rotated_box(img, b, (0, 255, 0), label=f'{l}')
                     else:
                         for b in bb.cpu().numpy():
-                            point2rbox_generator.plot_one_rotated_box(img, b, (0, 255, 0))
+                            plot_one_rotated_box(img, b, (0, 255, 0))
                 img_id = batch_data_samples_all[i].metainfo['img_id']
                 cv2.imwrite(f'debug/{img_id}_{i}.png', img)
 

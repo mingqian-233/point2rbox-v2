@@ -8,10 +8,13 @@ from .delta_xywht_rbbox_coder import DeltaXYWHTRBBoxCoder
 from .distance_angle_point_coder import DistanceAnglePointCoder
 from .distance_boundary_free_point_coder import DistanceBoundaryFreePointCoder
 from .gliding_vertex_coder import GVFixCoder, GVRatioCoder
+from .delta_xywh_psc_hbbox_coder import DeltaXYWHPSCHBBoxCoder
+from .delta_xywh_psc_rbbox_coder import DeltaXYWHPSCRBBoxCoder
 
 __all__ = [
     'DeltaXYWHTRBBoxCoder', 'DeltaXYWHTHBBoxCoder', 'MidpointOffsetCoder',
     'GVFixCoder', 'GVRatioCoder', 'CSLCoder', 'PSCCoder',
     'DistanceAnglePointCoder', 'DeltaXYWHHBBoxCoder', 'DeltaXYWHQBBoxCoder',
-    'PseudoAngleCoder', 'DistanceBoundaryFreePointCoder'
+    'PseudoAngleCoder', 'DistanceBoundaryFreePointCoder',
+    'DeltaXYWHPSCHBBoxCoder', 'DeltaXYWHPSCRBBoxCoder'
 ]

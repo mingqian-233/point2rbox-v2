@@ -2,6 +2,7 @@
 import os.path as osp
 import xml.etree.ElementTree as ET
 from typing import List, Optional, Union
+import json
 
 import mmcv
 import numpy as np
@@ -74,19 +75,44 @@ class DIORDataset(BaseDataset):
         }
 
         data_list = []
-        img_ids = list_from_file(self.ann_file, backend_args=self.backend_args)
-        for img_id in img_ids:
-            file_name = f'{img_id}.jpg'
-            xml_path = osp.join(self.data_root, self.ann_subdir,
-                                f'{img_id}.xml')
+        if self.ann_file.endswith('.txt'):
+            img_ids = list_from_file(self.ann_file, backend_args=self.backend_args)
+            for img_id in img_ids:
+                file_name = f'{img_id}.jpg'
+                xml_path = osp.join(self.data_root, self.ann_subdir,
+                                    f'{img_id}.xml')
 
-            raw_img_info = {}
-            raw_img_info['img_id'] = img_id
-            raw_img_info['file_name'] = file_name
-            raw_img_info['xml_path'] = xml_path
+                raw_img_info = {}
+                raw_img_info['img_id'] = img_id
+                raw_img_info['file_name'] = file_name
+                raw_img_info['xml_path'] = xml_path
 
-            parsed_data_info = self.parse_data_info(raw_img_info)
-            data_list.append(parsed_data_info)
+                parsed_data_info = self.parse_data_info(raw_img_info)
+                data_list.append(parsed_data_info)
+                
+        elif self.ann_file.endswith('.json'):
+            with open(self.ann_file, 'r') as f:
+                root = json.loads(f.read())
+
+            instances = {}
+            for item in root:
+                img_id = item['image_id']
+                if img_id not in instances.keys():
+                    instances[img_id] = []
+                instances[img_id].append({'bbox': item['bbox'],
+                                          'bbox_label': item['category_id'],
+                                          'ignore_flag': 0})
+
+            for img_id in instances.keys():
+                data_info = {}
+                data_info['img_id'] = img_id
+                img_name = f'{img_id}.jpg'
+                data_info['file_name'] = img_name
+                data_info['img_path'] = osp.join(self.data_prefix['img_path'],
+                                                 img_name)
+                data_info['instances'] = instances[img_id]
+                data_list.append(data_info)
+
         return data_list
 
     @property
@@ -196,17 +222,12 @@ class DIORDataset(BaseDataset):
 
         filter_empty_gt = self.filter_cfg.get('filter_empty_gt', False) \
             if self.filter_cfg is not None else False
-        min_size = self.filter_cfg.get('min_size', 0) \
-            if self.filter_cfg is not None else 0
 
         valid_data_infos = []
         for i, data_info in enumerate(self.data_list):
-            width = data_info['width']
-            height = data_info['height']
             if filter_empty_gt and len(data_info['instances']) == 0:
                 continue
-            if min(width, height) >= min_size:
-                valid_data_infos.append(data_info)
+            valid_data_infos.append(data_info)
 
         return valid_data_infos
 

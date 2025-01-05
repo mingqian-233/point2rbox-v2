@@ -244,7 +244,8 @@ class DOTAMetric(BaseMetric):
                 data['image_id'] = image_id
                 data['bbox'] = bboxes[i].tolist()
                 data['score'] = float(scores[i])
-                data['category_id'] = int(label)
+                label = int(label) if label.ndim == 0 else label.tolist()
+                data['category_id'] = label
                 bbox_json_results.append(data)
 
         result_files = dict()

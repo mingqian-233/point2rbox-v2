@@ -10,6 +10,72 @@ from mmrotate.structures.bbox import (QuadriBoxes, RotatedBoxes,
 
 
 @TASK_UTILS.register_module()
+class CircumRBboxOverlaps2D(object):
+    """2D Overlaps Calculator for Circumscribed Rotated Bboxes."""
+    
+    def nested_projection(self, pred, target):
+        target_xy1 = target[..., 0:2] - target[..., 2:4] / 2
+        target_xy2 = target[..., 0:2] + target[..., 2:4] / 2
+        target_projected = torch.cat((target_xy1, target_xy2), -1)
+        pred_xy = pred[..., 0:2]
+        pred_wh = pred[..., 2:4]
+        da = (pred[..., 4] - target[..., 4]).detach()
+        cosa = torch.cos(da).abs()
+        sina = torch.sin(da).abs()
+        pred_wh = torch.matmul(
+            torch.stack((cosa, sina, sina, cosa), -1).view(*cosa.shape, 2, 2),
+            pred_wh[..., None])[..., 0]
+        pred_xy1 = pred_xy - pred_wh / 2
+        pred_xy2 = pred_xy + pred_wh / 2
+        pred_projected = torch.cat((pred_xy1, pred_xy2), -1)
+        return pred_projected, target_projected
+
+    def __call__(self,
+                 bboxes1: RotatedBoxes,
+                 bboxes2: RotatedBoxes,
+                 mode: str = 'iou',
+                 is_aligned: bool = False) -> Tensor:
+        """Calculate IoU between 2D rotated bboxes.
+
+        Args:
+            bboxes1 (:obj:`RotatedBoxes` or Tensor): circumscribed bboxes have 
+                shape (m, 5) in <cx, cy, w, h, t> format, shape (m, 6) in
+                <cx, cy, w, h, t, score> format.
+            bboxes2 (:obj:`RotatedBoxes` or Tensor): internal bboxes have shape
+                (n, 5) in <cx, cy, w, h, t> format, shape (n, 6) in
+                <cx, cy, w, h, t, score> format, or be empty.
+            mode (str): 'iou' (intersection over union), 'iof' (intersection
+                over foreground). Defaults to 'iou'.
+            is_aligned (bool): If True, then m and n must be equal.
+                Defaults to False.
+
+        Returns:
+            Tensor: shape (m, n) if ``is_aligned `` is False else shape (m,)
+        """
+        assert bboxes1.size(-1) in [0, 5, 6]
+        assert bboxes2.size(-1) in [0, 5, 6]
+
+        if bboxes1.size(-1) == 6:
+            bboxes1 = bboxes1[..., :5]
+        if bboxes2.size(-1) == 6:
+            bboxes2 = bboxes2[..., :5]
+
+        bboxes1 = get_box_tensor(bboxes1)
+        bboxes2 = get_box_tensor(bboxes2)
+        if not is_aligned:
+            bboxes1 = bboxes1[:, None].expand(bboxes1.shape[0], bboxes2.shape[0], 5)
+            bboxes2 = bboxes2[None].expand(bboxes1.shape[0], bboxes2.shape[0], 5)
+        bboxes2, bboxes1 = self.nested_projection(bboxes2, bboxes1)
+
+        return bbox_overlaps(bboxes1, bboxes2, mode, True)
+
+    def __repr__(self) -> str:
+        """str: a string describing the module"""
+        repr_str = self.__class__.__name__ + '()'
+        return repr_str
+
+
+@TASK_UTILS.register_module()
 class RBboxOverlaps2D(object):
     """2D Overlaps Calculator for Rotated Bboxes."""
 

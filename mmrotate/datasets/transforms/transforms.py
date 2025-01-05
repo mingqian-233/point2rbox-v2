@@ -6,7 +6,7 @@ import cv2
 import mmcv
 import numpy as np
 import torch
-from mmcv.transforms import BaseTransform
+from mmcv.transforms import to_tensor, BaseTransform
 from mmcv.transforms.utils import cache_randomness
 from mmdet.structures.bbox import BaseBoxes, get_box_type
 from mmdet.structures.mask import PolygonMasks
@@ -62,7 +62,26 @@ class RBox2Point(BaseTransform):
 
         return results
     
-    
+
+@TRANSFORMS.register_module()
+class ClampBox(BaseTransform):
+    """Clamp RBoxes."""
+
+    def __init__(self,
+                 lower_bound: list = [0, 0, 1, 1, -10],
+                 upper_bound: list = [800, 800, 800, 800, -10]) -> None:
+        self.lower_bound = lower_bound
+        self.upper_bound = upper_bound
+
+    def transform(self, results: dict) -> dict:
+        """The transform function."""
+
+        for i, (lb, ub) in enumerate(zip(self.lower_bound, self.upper_bound)):
+            results['gt_bboxes'].tensor[:, i].clamp_(lb, ub)
+
+        return results
+
+
 @TRANSFORMS.register_module()
 class ConvertWeakSupervision(BaseTransform):
     """Convert RBoxes to Single Center Points."""
@@ -70,12 +89,14 @@ class ConvertWeakSupervision(BaseTransform):
     def __init__(self, 
                  point_proportion: float = 0.3,
                  hbox_proportion: float = 0.3, 
-                 point_dummy: float = 0.1,
-                 hbox_dummy: float = 0) -> None:
+                 point_dummy: float = 1,
+                 hbox_dummy: float = 0,
+                 modify_labels: bool = False) -> None:
         self.point_proportion = point_proportion
         self.hbox_proportion = hbox_proportion
         self.point_dummy = point_dummy
         self.hbox_dummy = hbox_dummy
+        self.modify_labels = modify_labels
 
     def transform(self, results: dict) -> dict:
         """The transform function."""
@@ -90,9 +111,38 @@ class ConvertWeakSupervision(BaseTransform):
             results['gt_bboxes'][max_idx_p:max_idx_h].convert_to('hbox').convert_to('rbox')
         results['gt_bboxes'].tensor[max_idx_p:max_idx_h, 4] = self.hbox_dummy
 
-        results['ws_types'] = torch.zeros(results['gt_bboxes'].tensor.shape[0], dtype=torch.long)
-        results['ws_types'][:max_idx_p] = 2
-        results['ws_types'][max_idx_p:max_idx_h] = 1
+        if self.modify_labels:
+            ws_types = torch.zeros(results['gt_bboxes'].tensor.shape[0], dtype=torch.long)
+            ws_types[:max_idx_p] = 2
+            ws_types[max_idx_p:max_idx_h] = 1
+            labels = to_tensor(results['gt_bboxes_labels'])
+            results['gt_bboxes_labels'] = torch.stack((labels, ws_types), -1)
+
+        return results
+    
+    
+@TRANSFORMS.register_module()
+class RBox2PointWithNoise(BaseTransform):
+    """Convert boxes in results to a certain box type.
+
+    Args:
+        box_type_mapping (dict): A dictionary whose key will be used to search
+            the item in `results`, the value is the destination box type.
+    """
+
+    def __init__(self, p=0.1) -> None:
+        self.p = p
+        pass
+
+    def transform(self, results: dict) -> dict:
+        """The transform function."""
+
+        h = torch.min(results['gt_bboxes'].tensor[:, 3:5], 1)[0]
+        results['gt_bboxes'].tensor[:, 0] += (torch.rand(1) * 2 - 1) * self.p * h
+        results['gt_bboxes'].tensor[:, 1] += (torch.rand(1) * 2 - 1) * self.p * h
+        results['gt_bboxes'].tensor[:, 2] = 0.1
+        results['gt_bboxes'].tensor[:, 3] = 0.1
+        results['gt_bboxes'].tensor[:, 4] = 0
 
         return results
 

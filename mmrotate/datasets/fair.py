@@ -3,6 +3,7 @@ import glob
 import os.path as osp
 import xml.etree.ElementTree as ET
 from typing import List
+import json
 
 import mmcv
 from mmengine.dataset import BaseDataset
@@ -74,7 +75,29 @@ class FAIRDataset(BaseDataset):
                 data_info['instances'] = [instance]
                 data_list.append(data_info)
 
-            return data_list
+        elif self.ann_file.endswith('.json'):
+            with open(self.ann_file, 'r') as f:
+                root = json.loads(f.read())
+
+            instances = {}
+            for item in root:
+                img_id = item['image_id']
+                if img_id not in instances.keys():
+                    instances[img_id] = []
+                instances[img_id].append({'bbox': item['bbox'],
+                                          'bbox_label': item['category_id'],
+                                          'ignore_flag': 0})
+
+            for img_id in instances.keys():
+                data_info = {}
+                data_info['img_id'] = img_id
+                img_name = f'{img_id}.png'
+                data_info['file_name'] = img_name
+                data_info['img_path'] = osp.join(self.data_prefix['img_path'],
+                                                 img_name)
+                data_info['instances'] = instances[img_id]
+                data_list.append(data_info)
+
         else:
             xml_files = glob.glob(osp.join(self.ann_file, '*.xml'))  # [:4000]
             if len(xml_files) == 0:
@@ -111,7 +134,7 @@ class FAIRDataset(BaseDataset):
                 data_info['instances'] = instances
                 data_list.append(data_info)
 
-            return data_list
+        return data_list
 
     def filter_data(self) -> List[dict]:
         """Filter annotations according to filter_cfg.

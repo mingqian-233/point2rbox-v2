@@ -70,7 +70,6 @@ class DOTADataset(BaseDataset):
                 data_info['instances'] = [instance]
                 data_list.append(data_info)
 
-            return data_list
         elif self.ann_file.endswith('.json'):
             with open(self.ann_file, 'r') as f:
                 root = json.loads(f.read())
@@ -94,7 +93,6 @@ class DOTADataset(BaseDataset):
                 data_info['instances'] = instances[img_id]
                 data_list.append(data_info)
 
-            return data_list
         else:
             txt_files = glob.glob(osp.join(self.ann_file, '*.txt'))
             if len(txt_files) == 0:
@@ -117,6 +115,8 @@ class DOTADataset(BaseDataset):
                         bbox_info = si.split()
                         instance['bbox'] = [float(i) for i in bbox_info[:8]]
                         cls_name = bbox_info[8]
+                        if cls_name not in self.metainfo['classes']:
+                            continue
                         instance['bbox_label'] = cls_map[cls_name]
                         difficulty = int(bbox_info[9])
                         if difficulty > self.diff_thr:
@@ -127,7 +127,7 @@ class DOTADataset(BaseDataset):
                 data_info['instances'] = instances
                 data_list.append(data_info)
 
-            return data_list
+        return data_list
 
     def filter_data(self) -> List[dict]:
         """Filter annotations according to filter_cfg.
@@ -154,6 +154,7 @@ class DOTADataset(BaseDataset):
 
         Args:
             idx (int): Index of data.
+
         Returns:
             List[int]: All categories in the image of specified index.
         """
@@ -209,42 +210,4 @@ class DOTAv2Dataset(DOTADataset):
                     (255, 250, 205), (0, 139, 139), (255, 255, 0),
                     (147, 116, 116), (0, 0, 255), (220, 20, 60), (119, 11, 32),
                     (0, 0, 142)]
-    }
-
-@DATASETS.register_module()
-class FAIRDOTADataset(DOTADataset):
-    """DOTA-v2.0 dataset for detection.
-
-    Note: ``ann_file`` in DOTAv2Dataset is different from the BaseDataset.
-    In BaseDataset, it is the path of an annotation file. In DOTAv2Dataset,
-    it is the path of a folder containing XML files.
-    """
-
-    METAINFO = {
-        # 'classes':
-        # ('Boeing737', 'Boeing747', 'Boeing777', 'Boeing787', 'C919', 'A220',
-        #  'A321', 'A330', 'A350', 'ARJ21', 'Passenger-Ship', 'Motorboat',
-        #  'Fishing-Boat', 'Tugboat', 'Engineering-Ship', 'Liquid-Cargo-Ship',
-        #  'Dry-Cargo-Ship', 'Warship', 'Small-Car', 'Bus', 'Cargo-Truck',
-        #  'Dump-Truck', 'Van', 'Trailer', 'Tractor', 'Excavator',
-        #  'Truck-Tractor', 'Basketball-Court', 'Tennis-Court', 'Football-Field',
-        #  'Baseball-Field', 'Intersection', 'Roundabout', 'Bridge'),
-        'classes':
-        ('Boeing737', 'Boeing747', 'Boeing777', 'Boeing787', 'C919', 'A220',
-         'A321', 'A330', 'A350', 'ARJ21', 'Passenger Ship', 'Motorboat',
-         'Fishing Boat', 'Tugboat', 'Engineering Ship', 'Liquid Cargo Ship',
-         'Dry Cargo Ship', 'Warship', 'Small Car', 'Bus', 'Cargo Truck',
-         'Dump Truck', 'Van', 'Trailer', 'Tractor', 'Excavator',
-         'Truck Tractor', 'Basketball Court', 'Tennis Court', 'Football Field',
-         'Baseball Field', 'Intersection', 'Roundabout', 'Bridge'),
-        # palette is a list of color tuples, which is used for visualization.
-        'palette':
-        [(220, 20, 60), (119, 11, 32), (0, 0, 142), (0, 0, 230), (106, 0, 228),
-         (0, 60, 100), (0, 80, 100), (0, 0, 70), (0, 0, 192), (250, 170, 30),
-         (100, 170, 30), (220, 220, 0), (175, 116, 175), (250, 0, 30),
-         (165, 42, 42), (255, 77, 255), (0, 226, 252), (182, 182, 255),
-         (0, 82, 0), (120, 166, 157), (22, 226, 252), (200, 182, 255),
-         (22, 82, 0), (0, 246, 252), (182, 202, 255), (0, 102, 0),
-         (255, 77, 155), (0, 226, 152), (182, 182, 155), (0, 82, 100),
-         (120, 166, 254), (22, 226, 152), (200, 182, 155), (22, 82, 100)]
     }

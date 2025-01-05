@@ -139,8 +139,7 @@ class H2RBoxV2PDetector(SingleStageDetector):
         for gt_instances, img_metas in zip(batch_gt_instances, batch_img_metas):
             blen = len(gt_instances.bboxes)
             dev = gt_instances.bboxes.device
-            gt_instances.bid = torch.arange(0, blen, 1, device=dev) + offset
-            gt_instances.ws = img_metas['ws_types'].to(dev)
+            gt_instances.bids = torch.arange(0, blen, 1, device=dev) + offset
             offset += blen
 
         # Generate rotated images and gts
@@ -161,7 +160,7 @@ class H2RBoxV2PDetector(SingleStageDetector):
                 gt_instances.bboxes.flip_(batch_inputs.shape[2:4], 'vertical')
                 
         for gt_instances in batch_gt_aug:
-            gt_instances.bid += 0.5
+            gt_instances.bids += 0.5
 
         batch_inputs_all = torch.cat((batch_inputs, batch_inputs_aug))
         batch_data_samples_all = []
