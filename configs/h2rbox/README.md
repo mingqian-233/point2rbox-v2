@@ -60,5 +60,4 @@ DIOR
   booktitle={International Conference on Learning Representations},
   year={2023}
 }
-
 ```
