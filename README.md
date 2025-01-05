@@ -4,7 +4,7 @@ We develop **Wholly-WOOD** (**Wholly** Leveraging Diversified-quality Labels for
 This project is the implementation of Wholly-WOOD. The code works with **PyTorch 1.13+** and it is forked from [MMRotate dev-1.x](https://github.com/open-mmlab/mmrotate/tree/dev-1.x). MMRotate is an open-source toolbox for rotated object detection based on PyTorch. It is a part of the [OpenMMLab project](https://github.com/open-mmlab).
 
 ## Installation
-Please refer to [Installation](https://mmrotate.readthedocs.io/en/1.x/get_started.html) for more detailed instruction.
+Please refer to [Installation](https://mmrotate.readthedocs.io/en/1.x/get_started.html) for more detailed instructions.
 
 ## Getting Started
 Please see [Overview](https://mmrotate.readthedocs.io/en/1.x/overview.html) for the general introduction of MMRotate. 
