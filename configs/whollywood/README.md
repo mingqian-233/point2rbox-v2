@@ -15,7 +15,7 @@ Accurately estimating the orientation of visual objects with compact rotated bou
 ## Evaluation on DOTA-v1.0
 
 All the commands assume that you are currently in the whollywood folder.
-```
+```shell
 cd whollywood
 ```
 
@@ -24,13 +24,13 @@ cd whollywood
 Step 1. Follow the instruction of MMRotate to prepare split_ss_dota. 
 
 Step 2. If you already have split_ss_dota on your disk, create a link:
-```
+```shell
 ln -s path/to/split_ss_dota data
 ```
 
 ### Two-stage training
 
-```
+```shell
 # Step 1. Train (1st stage)
 # There are two options, P2H (faster) or P2R (more accurate and end-to-end capability)
 python tools/train.py configs/whollywood/whollywood-1x-dota-p2h-pseudo.py
@@ -52,7 +52,7 @@ python tools/test.py configs/whollywood/whollywood-1x-dota-using-pseudo.py work_
 
 ### End-to-end training
 
-```
+```shell
 # Step 1. Run P2R (the same as the first step of two-stage training)
 python tools/train.py configs/whollywood/whollywood-1x-dota-p2r-pseudo.py
 
@@ -68,7 +68,7 @@ python tools/test.py configs/whollywood/whollywood-1x-dota-p2r-pseudo.py work_di
 
 ### Proportions of Point/HBox/RBox
 
-```
+```shell
 # The default proportion of all config files is 100% Points
 # The DOTA dataset is originally annotated with RBoxes
 # They can be converted to Points/HBoxes in the train_pipeline to simulate the weakly-supervised setting
@@ -90,7 +90,7 @@ post_process={1: 0.85}  # Otherwise
 
 ## Evaluation on HRSC
 
-```
+```shell
 # End-to-end training is sufficient for HRSC
 # Simply run the following command
 python tools/train.py configs/whollywood/whollywood-6x-hrsc.py
