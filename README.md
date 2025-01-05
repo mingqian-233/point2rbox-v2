@@ -41,8 +41,8 @@ This project is based on MMRotate, an open source project that is contributed by
 @inproceedings{yang2023h2rbox,
   title={H2RBox: Horizontal Box Annotation is All You Need for Oriented Object Detection},
   author={Yang, Xue and Zhang, Gefan and Li, Wentong and Wang, Xuehui and Zhou, Yue and Yan, Junchi},
-	booktitle={International Conference on Learning Representations},
-	year={2023}
+  booktitle={International Conference on Learning Representations},
+  year={2023}
 }
 @inproceedings{yu2023h2rboxv2,
   author={Yi Yu and Xue Yang and Qingyun Li and Yue Zhou and Feipeng Da and Junchi Yan},
