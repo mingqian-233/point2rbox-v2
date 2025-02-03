@@ -1,7 +1,7 @@
 ## Introduction
-We develop **Wholly-WOOD** (**Wholly** Leveraging Diversified-quality Labels for **W**eakly-supervised **O**riented **O**bject **D**etection), a weakly-supervised OOD framework, capable of wholly leveraging various labeling forms (Points, HBoxes, RBoxes, and their combination) in a unified fashion. By only using HBox for training, our Wholly-WOOD achieves performance very close to that of the RBox-trained counterpart on remote sensing and other areas, which significantly reduces the tedious efforts on labor-intensive annotation for oriented objects.
+We develop **Point2RBox-v2** (Rethinking Point-supervised Oriented Object Detection with Spatial Layout Among Instances). In this paper, we rethink this challenging task setting with the layout among instances and present Point2RBox-v2. At the core are three principles: 1) Gaussian overlap loss. It learns an upper bound for each instance by treating objects as 2D Gaussian distributions and minimizing their overlap. 2) Voronoi watershed loss. It learns a lower bound for each instance through watershed on Voronoi tessellation. 3) Consistency loss. It learns the size/rotation variation between two output sets with respect to an input image and its augmented view. Supplemented by a few devised techniques, e.g. edge loss and copy-paste, the detector is further enhanced.
 
-This project is the implementation of Wholly-WOOD. The code works with **PyTorch 1.13+** and it is forked from [MMRotate dev-1.x](https://github.com/open-mmlab/mmrotate/tree/dev-1.x). MMRotate is an open-source toolbox for rotated object detection based on PyTorch. It is a part of the [OpenMMLab project](https://github.com/open-mmlab).
+This project is the implementation of Point2RBov-v2. The code works with **PyTorch 1.13+** and it is forked from [MMRotate dev-1.x](https://github.com/open-mmlab/mmrotate/tree/dev-1.x). MMRotate is an open-source toolbox for rotated object detection based on PyTorch. It is a part of the [OpenMMLab project](https://github.com/open-mmlab).
 
 ## Installation
 Please refer to [Installation](https://mmrotate.readthedocs.io/en/1.x/get_started.html) for more detailed instructions.
@@ -11,10 +11,10 @@ Please see [Overview](https://mmrotate.readthedocs.io/en/1.x/overview.html) for 
 
 For detailed user guides and advanced guides, please refer to MMRotate's [documentation](https://mmrotate.readthedocs.io/en/1.x/).
 
-The examples of training and testing Wholly-WOOD can be found [here](configs/whollywood/README.md).
+The examples of training and testing Point2RBox-v2 can be found [here](configs/point2rbox_v2/README.md).
 
 ## Model Zoo
-This repository contains the Wholly-WOOD model and our series of work on weakly-supervised OOD.
+This repository contains our series of work on weakly-supervised OOD.
 
 <details open>
 <summary><b>Supported algorithms:</b></summary>
