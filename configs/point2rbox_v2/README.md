@@ -55,5 +55,11 @@ python tools/test.py configs/point2rbox_v2/rotated-fcos-1x-dota-using-pseudo.py 
 ```
 
 ## Citation
-
-Coming soon.
+```
+@article{yu2025point2rboxv2,
+  title={Point2RBox-v2: Rethinking Point-supervised Oriented Object Detection with Spatial Layout Among Instances}, 
+  author={Yi Yu and Botao Ren and Peiyuan Zhang and Mingxin Liu and Junwei Luo and Shaofeng Zhang and Feipeng Da and Junchi Yan and Xue Yang},
+  year={2025},
+  journal={arXiv preprint arXiv:2502.04268},
+}
+```
