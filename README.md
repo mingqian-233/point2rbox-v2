@@ -1,3 +1,24 @@
+<p align="center">
+  <h1 align="center">Point2RBox-v2：Rethinking Point-supervised Oriented Object Detection with Spatial Layout Among Instances</h1>
+  <p align="center">
+      <a href='https://scholar.google.com/citations?user=OYtSc4AAAAAJ' style='text-decoration: none' >Yi Yu</a><sup></sup>&emsp; 
+      <a href='https://scholar.google.com/citations?user=BTaRU00AAAAJ' style='text-decoration: none' >Botao Ren</a><sup></sup>&emsp;     
+      <a href='https://scholar.google.com/citations?user=rQbW67AAAAAJ' style='text-decoration: none' >Peiyuan Zhang</a><sup></sup>&emsp;
+      <a href='' style='text-decoration: none' >Mingxin Liu</a><sup></sup>&emsp;   
+      <a href='https://scholar.google.com/citations?user=6XibZaYAAAAJ' style='text-decoration: none' >Junwei Luo</a><sup></sup>&emsp;
+      <a href='https://scholar.google.com/citations?user=VoVVJIgAAAAJ' style='text-decoration: none' >Shaofeng Zhang</a><sup></sup>&emsp;
+      <a href='' style='text-decoration: none' >Feipeng Da</a><sup></sup>&emsp;
+      <a href='https://scholar.google.com/citations?user=ga230VoAAAAJ&hl=en' style='text-decoration: none' >Junchi Yan</a><sup></sup>&emsp; 
+      <a href='https://yangxue0827.github.io/' style='text-decoration: none' >Xue Yang</a><sup></sup>&emsp;
+      <div align="center">
+      <a href='https://arxiv.org/abs/2502.04268'><img src='https://img.shields.io/badge/arXiv-2502.04268-brown.svg?logo=arxiv&logoColor=white'></a>
+	  </div>
+    <p align='center'>
+        If you find our work helpful, please consider giving us a ⭐!
+    </p>
+   </p>
+</p>
+
 ## Introduction
 We develop **Point2RBox-v2** (Rethinking Point-supervised Oriented Object Detection with Spatial Layout Among Instances). In this paper, we rethink this challenging task setting with the layout among instances. At the core are three principles: 1) Gaussian overlap loss. It learns an upper bound for each instance by treating objects as 2D Gaussian distributions and minimizing their overlap. 2) Voronoi watershed loss. It learns a lower bound for each instance through watershed on Voronoi tessellation. 3) Consistency loss. It learns the size/rotation variation between two output sets with respect to an input image and its augmented view. Supplemented by a few devised techniques, e.g. edge loss and copy-paste, the detector is further enhanced.
 
@@ -56,6 +77,12 @@ This project is based on MMRotate, an open source project that is contributed by
   booktitle={IEEE/CVF Conference on Computer Vision and Pattern Recognition},
   pages={16783--16793},
   year={2024}
+}
+@article{yu2025point2rboxv2,
+  title={Point2RBox-v2: Rethinking Point-supervised Oriented Object Detection with Spatial Layout Among Instances}, 
+  author={Yi Yu and Botao Ren and Peiyuan Zhang and Mingxin Liu and Junwei Luo and Shaofeng Zhang and Feipeng Da and Junchi Yan and Xue Yang},
+  year={2025},
+  journal={arXiv preprint arXiv:2502.04268},
 }
 ```
 
