@@ -1,22 +1,23 @@
 <p align="center">
   <h1 align="center">Point2RBox-v2：Rethinking Point-supervised Oriented Object Detection with Spatial Layout Among Instances</h1>
   <p align="center">
-      <a href='https://scholar.google.com/citations?user=OYtSc4AAAAAJ' style='text-decoration: none' >Yi Yu</a><sup></sup>&emsp; 
-      <a href='https://scholar.google.com/citations?user=BTaRU00AAAAJ' style='text-decoration: none' >Botao Ren</a><sup></sup>&emsp;     
-      <a href='https://scholar.google.com/citations?user=rQbW67AAAAAJ' style='text-decoration: none' >Peiyuan Zhang</a><sup></sup>&emsp;
-      <a href='' style='text-decoration: none' >Mingxin Liu</a><sup></sup>&emsp;   
-      <a href='https://scholar.google.com/citations?user=6XibZaYAAAAJ' style='text-decoration: none' >Junwei Luo</a><sup></sup>&emsp;
-      <a href='https://scholar.google.com/citations?user=VoVVJIgAAAAJ' style='text-decoration: none' >Shaofeng Zhang</a><sup></sup>&emsp;
-      <a href='' style='text-decoration: none' >Feipeng Da</a><sup></sup>&emsp;
-      <a href='https://scholar.google.com/citations?user=ga230VoAAAAJ&hl=en' style='text-decoration: none' >Junchi Yan</a><sup></sup>&emsp; 
-      <a href='https://yangxue0827.github.io/' style='text-decoration: none' >Xue Yang</a><sup></sup>&emsp;
-      <div align="center">
+    <a href='https://scholar.google.com/citations?user=OYtSc4AAAAAJ' style='text-decoration: none' >Yi Yu</a><sup></sup>&emsp; 
+    <a href='https://scholar.google.com/citations?user=BTaRU00AAAAJ' style='text-decoration: none' >Botao Ren</a><sup></sup>&emsp;     
+    <a href='https://scholar.google.com/citations?user=rQbW67AAAAAJ' style='text-decoration: none' >Peiyuan Zhang</a><sup></sup>&emsp;
+    <a href='' style='text-decoration: none' >Mingxin Liu</a><sup></sup>&emsp;   
+    <a href='https://scholar.google.com/citations?user=6XibZaYAAAAJ' style='text-decoration: none' >Junwei Luo</a><sup></sup>&emsp;
+    <a href='https://scholar.google.com/citations?user=VoVVJIgAAAAJ' style='text-decoration: none' >Shaofeng Zhang</a><sup></sup>&emsp;
+    <a href='' style='text-decoration: none' >Feipeng Da</a><sup></sup>&emsp;
+    <a href='https://scholar.google.com/citations?user=ga230VoAAAAJ&hl=en' style='text-decoration: none' >Junchi Yan</a><sup></sup>&emsp; 
+    <a href='https://yangxue0827.github.io/' style='text-decoration: none' >Xue Yang</a><sup></sup>&emsp;
+    <div align="center">
       <a href='https://arxiv.org/abs/2502.04268'><img src='https://img.shields.io/badge/arXiv-2502.04268-brown.svg?logo=arxiv&logoColor=white'></a>
-	  </div>
+      <a href='https://zhuanlan.zhihu.com/p/21748498041'><img src='https://img.shields.io/badge/Zhihu-Chinese_Article-blue.svg?logo=zhihu&logoColor=white'></a>
+    </div>
     <p align='center'>
-        If you find our work helpful, please consider giving us a ⭐!
+      If you find our work helpful, please consider giving us a ⭐!
     </p>
-   </p>
+  </p>
 </p>
 
 ## Introduction
