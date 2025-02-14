@@ -1,6 +1,6 @@
 # Wholly-WOOD
 
-> [Wholly-WOOD: Wholly Leveraging Diversified-quality Labels for Weakly-supervised Oriented Object Detection](https://arxiv.org/pdf/0)
+> [Wholly-WOOD: Wholly Leveraging Diversified-quality Labels for Weakly-supervised Oriented Object Detection](https://arxiv.org/pdf/2502.09471)
 
 <!-- [ALGORITHM] -->
 
