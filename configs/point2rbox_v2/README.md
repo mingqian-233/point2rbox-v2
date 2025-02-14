@@ -1,6 +1,6 @@
 # Point2RBox-v2
 
-> Point2RBox-v2: Rethinking Point-supervised Oriented Object Detection with Spatial Layout Among Instances
+[Point2RBox-v2: Rethinking Point-supervised Oriented Object Detection with Spatial Layout Among Instances](https://arxiv.org/abs/2502.04268)
 
 <!-- [ALGORITHM] -->
 
