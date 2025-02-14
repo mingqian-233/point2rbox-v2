@@ -106,5 +106,11 @@ python tools/train.py configs/whollywood/whollywood-6x-hrsc.py
 | ResNet50 (1024,1024,200) | Point-to-RBox | 65.10 |   1x    | MS+RR |     2      | [whollywood-ms_rr-1x-dota-p2r-pseudo](./whollywood-ms_rr-1x-dota-p2r-pseudo.py)<br>[whollywood-ms_rr-1x-dota-using-pseudo](./whollywood-ms_rr-1x-dota-using-pseudo.py) |
 
 ## Citation
-
-Coming soon.
+```
+@article{yu2025whollywood,
+  title={Wholly-WOOD: Wholly Leveraging Diversified-quality Labels for Weakly-supervised Oriented Object Detection}, 
+  author={Yi Yu and Xue Yang and Yansheng Li and Zhenjun Han and Feipeng Da and Junchi Yan},
+  year={2025},
+  journal={IEEE Transactions on Pattern Analysis and Machine Intelligence},
+}
+```
