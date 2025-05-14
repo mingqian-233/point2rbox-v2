@@ -212,15 +212,17 @@ def gaussian_2d(xy, mu, sigma, normalize=False):
         t0 = t0 / (2 * np.pi * sigma.det().clamp(1e-7).sqrt())
     return t0
 
-
 def gaussian_voronoi_watershed_loss(mu, sigma,
                                     label, image, 
-                                    pos_thres, neg_thres, 
+                                    pos_thres, neg_thres,
+                                    size=None,uncertainty=None,min_ratio_threshold=None,max_ratio_threshold=None,
                                     down_sample=2, topk=0.95, 
                                     default_sigma=4096,
-                                    voronoi='gaussian-orientation',
+                                    voronoi='prior_guide',
                                     alpha=0.1,
                                     debug=False):
+
+    
     J = len(sigma)
     if J == 0:
         return sigma.sum()
@@ -251,6 +253,24 @@ def gaussian_voronoi_watershed_loss(mu, sigma,
         sg = sigma.detach() / D ** 2
         for j, (m, s) in enumerate(zip(mm, sg)):
             vor[j] = gaussian_2d(xy.view(-1, 2), m[None], s[None]).view(h, w)
+    elif voronoi == 'prior_guide':
+        # 加权维诺图，按照size参数进行加权
+        L, V = torch.linalg.eigh(sigma)
+        L = L.detach().clone()
+        L = L / (L[:, 0:1] * L[:, 1:2]).sqrt() * default_sigma
+        sg = V.matmul(torch.diag_embed(L)).matmul(V.permute(0, 2, 1)).detach()
+        sg = sg / D ** 2
+        
+        # 获取每个目标的类别，以便使用对应的size进行加权
+        classes = label.detach().cpu().numpy()
+        weights = torch.tensor([size[int(cls)] for cls in classes], device=mu.device)
+        
+        for j, (m, s) in enumerate(zip(mm, sg)):
+            # 根据类别对应的size进行权重加成
+            weight = weights[j]
+            # 用权重调整高斯分布半径
+            vor[j] = gaussian_2d(xy.view(-1, 2), m[None], s[None] / weight).view(h, w) * weight
+            
     # val: max prob, vor: belong to which instance, cls: belong to which class
     val, vor = torch.max(vor, 0)
     if D > 1:
@@ -277,9 +297,18 @@ def gaussian_voronoi_watershed_loss(mu, sigma,
     img_uint8 = cv2.medianBlur(img_uint8, 3)
     markers = vor.detach().cpu().numpy().astype(np.int32)
     markers = vor.new_tensor(cv2.watershed(img_uint8, markers))
+    
+    # 应用先验约束进行分水岭结果后处理
+    if voronoi == 'prior_guide':
+        ori_markers= markers.detach()
+        markers = apply_prior_constraints(markers, label, size, uncertainty, 
+                                          min_ratio_threshold, max_ratio_threshold, 
+                                          image, J)
+        
 
     if debug:
-        plot_gaussian_voronoi_watershed(image, cls_bg, markers)
+        # plot_gaussian_voronoi_watershed(image, cls_bg, markers)
+        plot_watershed_result(image, ori_markers,markers, label)
 
     L, V = torch.linalg.eigh(sigma)
     L_target = []
@@ -300,6 +329,270 @@ def gaussian_voronoi_watershed_loss(mu, sigma,
     loss = torch.topk(loss, int(np.ceil(len(loss) * topk)), largest=False)[0].mean()
     return loss, (vor, markers)
 
+
+def apply_prior_constraints(markers, label, size, uncertainty, 
+                           min_ratio_threshold, max_ratio_threshold, 
+                           image, J):
+    """
+    根据先验约束调整分水岭的结果
+    
+    Args:
+        markers: 分水岭的结果
+        label: 每个目标的类别
+        size: 每个类别的面积大小指数
+        uncertainty: 每个类别的不可信度
+        min_ratio_threshold: 与平均值的最小比例阈值
+        max_ratio_threshold: 与平均值的最大比例阈值
+        image: 原始图像
+        J: 目标的数量
+    """
+    # 从GPU转到CPU处理
+    markers_np = markers.detach().cpu().numpy()
+    label_np = label.detach().cpu().numpy()
+    
+    # 按类别分组目标
+    class_groups = {}
+    for j in range(J):
+        cls = int(label_np[j])
+        if cls not in class_groups:
+            class_groups[cls] = []
+        area = np.sum(markers_np == (j + 1))
+        if area > 0:  # 确保分水岭结果中目标存在
+            class_groups[cls].append((j, area))
+    
+    # 创建一个标记掩码的副本，用于修改
+    modified_markers = markers_np.copy()
+    
+    # 情况1: 处理同一图片内多种目标类别的情况
+    if len(class_groups) > 1:
+        # 先处理同一类别有多个目标的情况
+        for cls, objects in class_groups.items():
+            if len(objects) > 1:
+                # 计算该类别目标的平均面积
+                areas = [area for _, area in objects]
+                mean_area = np.mean(areas)
+                
+                # 根据阈值确定允许的面积范围
+                min_area = mean_area * min_ratio_threshold[cls]
+                max_area = mean_area * max_ratio_threshold[cls]
+                
+                # 调整不符合范围的目标
+                for j, area in objects:
+                    if area < min_area:
+                        # 区域生长直到达到阈值
+                        modified_markers = region_grow(modified_markers, j+1, min_area, image)
+                    elif area > max_area:
+                        # 形态学腐蚀
+                        modified_markers = region_erode(modified_markers, j+1, max_area)
+        
+        # 处理只有一个实例的类别，它们需要与其他类别进行比较
+        single_instance_classes = {cls: objs[0] for cls, objs in class_groups.items() if len(objs) == 1}
+        
+        if len(single_instance_classes) > 0:
+            # 如果有多个单实例类别，两两配对处理
+            classes = list(single_instance_classes.keys())
+            for i in range(len(classes)):
+                for j in range(i+1, len(classes)):
+                    cls1, cls2 = classes[i], classes[j]
+                    j1, area1 = single_instance_classes[cls1]
+                    j2, area2 = single_instance_classes[cls2]
+                    
+                    # 根据不可信度计算贡献权重
+                    s1 = uncertainty[cls1]
+                    s2 = uncertainty[cls2]
+                    
+                    # 理想面积比例
+                    c1 = size[cls1]
+                    c2 = size[cls2]
+                    
+                    # 检查当前面积比例是否在合理范围内
+                    current_ratio = area1 / area2
+                    target_ratio = c1 / c2
+                    
+                    # 如果比例不合理，则调整
+                    if abs(current_ratio - target_ratio) > 0.2 * target_ratio:
+                        # 使用公式计算调整量
+                        t = (c1 * area2 - c2 * area1) / (c2 * s1 + c1 * s2)
+                        delta_area1 = s1 * t
+                        delta_area2 = s2 * t
+                        
+                        # 根据计算结果调整区域
+                        if delta_area1 > 0:
+                            # 区域1需要扩大
+                            modified_markers = region_grow(modified_markers, j1+1, area1 + delta_area1, image)
+                        elif delta_area1 < 0:
+                            # 区域1需要缩小
+                            modified_markers = region_erode(modified_markers, j1+1, area1 + delta_area1)
+                            
+                        if delta_area2 > 0:
+                            # 区域2需要扩大
+                            modified_markers = region_grow(modified_markers, j2+1, area2 + delta_area2, image)
+                        elif delta_area2 < 0:
+                            # 区域2需要缩小
+                            modified_markers = region_erode(modified_markers, j2+1, area2 + delta_area2)
+    
+    # 情况2: 处理同一图片只有一种目标类别的情况
+    elif len(class_groups) == 1:
+        cls = list(class_groups.keys())[0]
+        objects = class_groups[cls]
+        
+        # 只处理不确定度大于0.5的类别
+        if uncertainty[cls] >= 0.5:
+            if len(objects) > 1:
+                # 计算平均面积
+                areas = [area for _, area in objects]
+                mean_area = np.mean(areas)
+                
+                # 根据阈值确定允许的面积范围
+                min_area = mean_area * min_ratio_threshold[cls]
+                max_area = mean_area * max_ratio_threshold[cls]
+                
+                # 调整不符合范围的目标
+                for j, area in objects:
+                    if area < min_area:
+                        # 区域生长直到达到阈值
+                        modified_markers = region_grow(modified_markers, j+1, min_area, image)
+                    elif area > max_area:
+                        # 形态学腐蚀
+                        modified_markers = region_erode(modified_markers, j+1, max_area)
+    
+    # 将处理后的结果转回PyTorch tensor
+    return torch.tensor(modified_markers, device=markers.device, dtype=markers.dtype)
+
+
+def region_grow(markers, label_id, target_area, image):
+    """
+    基于原图的区域生长算法，扩展目标区域直到达到目标面积
+    """
+    # 将图像转换为灰度图（如果它是彩色的）
+    if len(image.shape) > 2 and image.shape[2] > 1:
+        img_gray = cv2.cvtColor(image.permute(1, 2, 0).cpu().numpy().astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    else:
+        img_gray = image.cpu().numpy().astype(np.uint8)
+    
+    # 获取当前目标区域
+    current_mask = markers == label_id
+    current_area = np.sum(current_mask)
+    
+    if current_area >= target_area:
+        return markers
+    
+    # 初始化队列（包含当前区域的边界像素）
+    seed_points = []
+    
+    # 找出边界像素（使用膨胀和减法来找出边界）
+    kernel = np.ones((3, 3), np.uint8)
+    dilated = cv2.dilate(current_mask.astype(np.uint8), kernel, iterations=1)
+    boundary = dilated - current_mask.astype(np.uint8)
+    boundary_points = np.where(boundary > 0)
+    
+    # 将边界点添加到队列中，并计算其与当前区域的平均像素值差异
+    region_mean = np.mean(img_gray[current_mask])
+    for y, x in zip(boundary_points[0], boundary_points[1]):
+        # 检查点是否在图像边界内且不属于其他目标
+        if (0 <= y < markers.shape[0] and 0 <= x < markers.shape[1] and 
+            markers[y, x] <= 0):  # 只添加背景点
+            pixel_value = img_gray[y, x]
+            diff = abs(pixel_value - region_mean)
+            # 添加点及其与均值的差异作为优先级
+            seed_points.append((diff, (y, x)))
+    
+    # 按照与区域均值差异排序（差异小的先添加）
+    seed_points.sort()
+    
+    # 当前区域掩码的副本
+    new_mask = current_mask.copy()
+    
+    # 开始区域生长，直到达到目标面积或没有更多可添加的点
+    while current_area < target_area and seed_points:
+        # 取出差异最小的点
+        _, (y, x) = seed_points.pop(0)
+        
+        # 如果该点已被添加或已被其他标签占用，则跳过
+        if new_mask[y, x] or markers[y, x] > 0:
+            continue
+        
+        # 添加该点到区域中
+        new_mask[y, x] = True
+        current_area += 1
+        
+        # 若达到目标面积，则停止
+        if current_area >= target_area:
+            break
+        
+        # 检查该点的邻居，将符合条件的邻居添加到种子点列表
+        for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            ny, nx = y + dy, x + dx
+            
+            # 检查邻居是否在图像边界内且未被添加过且不属于其他目标
+            if (0 <= ny < markers.shape[0] and 0 <= nx < markers.shape[1] and 
+                not new_mask[ny, nx] and markers[ny, nx] <= 0):
+                pixel_value = img_gray[ny, nx]
+                diff = abs(pixel_value - region_mean)
+                
+                # 插入新的种子点，保持列表排序
+                i = 0
+                while i < len(seed_points) and seed_points[i][0] < diff:
+                    i += 1
+                seed_points.insert(i, (diff, (ny, nx)))
+    
+    # 更新标记图
+    markers_copy = markers.copy()
+    markers_copy[new_mask] = label_id
+    
+    return markers_copy
+
+def region_erode(markers, label_id, target_area):
+    """
+    形态学腐蚀算法，减小目标区域直到达到目标面积
+    """
+    current_mask = markers == label_id
+    current_area = np.sum(current_mask)
+    
+    if current_area <= target_area:
+        return markers
+    
+    # 转换为OpenCV格式
+    mask = current_mask.astype(np.uint8) * 255
+    
+    # 创建不同尺度的结构元素用于腐蚀
+    kernel_small = np.ones((3, 3), np.uint8)
+    kernel_medium = np.ones((5, 5), np.uint8)
+    
+    # 逐步腐蚀直到达到目标面积
+    iterations = 0
+    max_iterations = 50  # 防止无限循环
+    
+    while current_area > target_area and iterations < max_iterations:
+        if iterations < 10:
+            # 前10次使用小内核
+            mask_eroded = cv2.erode(mask, kernel_small, iterations=1)
+        else:
+            # 之后使用中等内核
+            mask_eroded = cv2.erode(mask, kernel_medium, iterations=1)
+            
+        # 更新当前掩码和面积
+        new_mask = mask_eroded > 0
+        new_area = np.sum(new_mask)
+        
+        if new_area < current_area:
+            # 更新标记
+            markers_copy = markers.copy()
+            markers_copy[current_mask & ~new_mask] = 0  # 移除腐蚀掉的部分
+            markers = markers_copy
+            current_mask = new_mask
+            current_area = new_area
+        else:
+            # 无法进一步减小
+            break
+            
+        iterations += 1
+        
+        # 如果已经接近目标面积，可以提前结束
+        if current_area <= 1.05 * target_area:
+            break
+    
+    return markers
 
 @MODELS.register_module()
 class VoronoiWatershedLoss(nn.Module):
@@ -330,7 +623,9 @@ class VoronoiWatershedLoss(nn.Module):
         self.alpha = alpha
         self.debug = debug
 
-    def forward(self, pred, label, image, pos_thres, neg_thres, voronoi='orientation'):
+    def forward(self, pred, label, image, pos_thres, neg_thres,
+                voronoi='prior_guide',
+                size=None,uncertainty=None,min_ratio_threshold=None,max_ratio_threshold=None):
         """Forward function.
 
         Args:
@@ -345,16 +640,23 @@ class VoronoiWatershedLoss(nn.Module):
         Returns:
             torch.Tensor: The calculated loss
         """
-        loss, self.vis = gaussian_voronoi_watershed_loss(*pred, 
-                                               label,
-                                               image, 
-                                               pos_thres, 
-                                               neg_thres, 
-                                               self.down_sample, 
-                                               topk=self.topk,
-                                               voronoi=voronoi,
-                                               alpha=self.alpha,
-                                               debug=self.debug)
+        # Use ** to prevent duplicate parameters
+        loss, self.vis = gaussian_voronoi_watershed_loss(
+            *pred,
+            label,
+            image,
+            pos_thres,
+            neg_thres,
+            size=size,
+            uncertainty=uncertainty,
+            min_ratio_threshold=min_ratio_threshold,
+            max_ratio_threshold=max_ratio_threshold,
+            down_sample=self.down_sample,
+            topk=self.topk,
+            voronoi=voronoi,
+            alpha=self.alpha,
+            debug=self.debug
+        )
         return self.loss_weight * loss
 
 
@@ -405,6 +707,194 @@ def plot_edge_map(feat, edgex, edgey):
         plt.yticks([])
     plt.savefig(f'debug/Edge-Map-{fileid}.png')
     plt.close()
+def plot_watershed_result(image, original_markers, optimized_markers, labels, edgex=None, edgey=None):
+    """
+    绘制原始分水岭结果与优化后结果的对比，并标注类别
+    
+    Args:
+        image (torch.Tensor): 原始图像，形状为 [C, H, W]
+        original_markers (torch.Tensor): 原始分水岭结果，形状为 [H, W]
+        optimized_markers (torch.Tensor): 优化后的分水岭结果，形状为 [H, W]
+        labels (torch.Tensor): 每个目标的类别，形状为 [N]
+        edgex (torch.Tensor, optional): X方向边缘图
+        edgey (torch.Tensor, optional): Y方向边缘图
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    import numpy as np
+    from matplotlib.colors import ListedColormap
+    
+    # 类别名称列表
+    class_names = [
+        'plane', 'baseball-diamond', 'bridge', 'ground-track-field',
+        'small-vehicle', 'large-vehicle', 'ship', 'tennis-court',
+        'basketball-court', 'storage-tank', 'soccer-ball-field', 'roundabout',
+        'harbor', 'swimming-pool', 'helicopter'
+    ]
+    
+    plt.figure(dpi=300, figsize=(15, 10))
+    
+    fileid = labels.detach().cpu().numpy().sum()
+    
+    # 准备颜色映射 - 使用不同颜色表示不同标签
+    np.random.seed(42)  # 固定随机种子以保持颜色一致
+    colors = np.random.rand(256, 3)  # 生成随机颜色
+    colors[0] = [0, 0, 0]  # 背景为黑色
+    cmap = ListedColormap(colors)
+    
+    # 将图像转换为numpy数组
+    if isinstance(image, torch.Tensor):
+        img = image.permute(1, 2, 0).cpu().numpy()
+        img = (img - img.min()) / (img.max() - img.min())  # 归一化到[0,1]
+    else:
+        img = image
+    
+    if isinstance(original_markers, torch.Tensor):
+        orig_markers_np = original_markers.cpu().numpy()
+    else:
+        orig_markers_np = original_markers
+        
+    if isinstance(optimized_markers, torch.Tensor):
+        opt_markers_np = optimized_markers.cpu().numpy()
+    else:
+        opt_markers_np = optimized_markers
+    
+    if isinstance(labels, torch.Tensor):
+        labels_np = labels.cpu().numpy()
+    else:
+        labels_np = labels
+    
+    # 创建3x2的子图布局
+    # 原始图像
+    plt.subplot(2, 3, 1)
+    plt.title("Original Image")
+    plt.imshow(img)
+    plt.axis('off')
+    
+    # 原始分水岭结果
+    plt.subplot(2, 3, 2)
+    plt.title("Original Watershed")
+    plt.imshow(orig_markers_np, cmap=cmap)
+    plt.axis('off')
+    
+    # 带标签的原始分水岭结果
+    plt.subplot(2, 3, 3)
+    plt.title("Original Watershed (Labeled)")
+    plt.imshow(orig_markers_np, cmap=cmap, alpha=0.7)
+    plt.imshow(img, alpha=0.3)
+    
+    # 为原始分水岭结果添加标签
+    used_labels = set()
+    for j in range(1, orig_markers_np.max() + 1):
+        if j - 1 < len(labels_np):
+            y_indices, x_indices = np.where(orig_markers_np == j)
+            if len(y_indices) > 0:
+                y_center = int(np.mean(y_indices))
+                x_center = int(np.mean(x_indices))
+                
+                class_id = int(labels_np[j - 1])
+                if class_id < len(class_names):
+                    class_name = class_names[class_id]
+                else:
+                    class_name = f"Class {class_id}"
+                
+                plt.text(x_center, y_center, class_name, 
+                         color='white', fontsize=8, 
+                         ha='center', va='center',
+                         bbox=dict(boxstyle="round,pad=0.3", fc='black', alpha=0.7))
+                used_labels.add(class_id)
+    plt.axis('off')
+    
+    # 优化后的分水岭结果
+    plt.subplot(2, 3, 5)
+    plt.title("Optimized Watershed")
+    plt.imshow(opt_markers_np, cmap=cmap)
+    plt.axis('off')
+    
+    # 带标签的优化分水岭结果
+    plt.subplot(2, 3, 6)
+    plt.title("Optimized Watershed (Labeled)")
+    plt.imshow(opt_markers_np, cmap=cmap, alpha=0.7)
+    plt.imshow(img, alpha=0.3)
+    
+    # 为优化分水岭结果添加标签
+    for j in range(1, opt_markers_np.max() + 1):
+        if j - 1 < len(labels_np):
+            y_indices, x_indices = np.where(opt_markers_np == j)
+            if len(y_indices) > 0:
+                y_center = int(np.mean(y_indices))
+                x_center = int(np.mean(x_indices))
+                
+                class_id = int(labels_np[j - 1])
+                if class_id < len(class_names):
+                    class_name = class_names[class_id]
+                else:
+                    class_name = f"Class {class_id}"
+                
+                plt.text(x_center, y_center, class_name, 
+                         color='white', fontsize=8, 
+                         ha='center', va='center',
+                         bbox=dict(boxstyle="round,pad=0.3", fc='black', alpha=0.7))
+                used_labels.add(class_id)
+    plt.axis('off')
+    
+    # 如果有边缘图，则显示
+    if edgex is not None and edgey is not None:
+        plt.subplot(2, 3, 4)
+        plt.title("Edge Map")
+        
+        if isinstance(edgex, torch.Tensor) and isinstance(edgey, torch.Tensor):
+            img1 = edgex[0, :3]
+            img1 = (img1 - img1.min()) / (img1.max() - img1.min())
+            img2 = edgey[0, :3]
+            img2 = (img2 - img2.min()) / (img2.max() - img2.min())
+            img3 = img1 + img2
+            img3 = (img3 - img3.min()) / (img3.max() - img3.min())
+            
+            edge_img = img3.permute(1, 2, 0).detach().cpu().numpy()
+            plt.imshow(edge_img)
+        else:
+            # 如果没有提供边缘图，则显示面积变化对比图
+            area_diff = np.zeros_like(opt_markers_np, dtype=float)
+            
+            # 计算每个目标的面积变化比例
+            for j in range(1, max(orig_markers_np.max(), opt_markers_np.max()) + 1):
+                orig_area = np.sum(orig_markers_np == j)
+                opt_area = np.sum(opt_markers_np == j)
+                
+                if orig_area > 0 and opt_area > 0:
+                    # 标记优化后区域的面积变化比例
+                    change_ratio = (opt_area - orig_area) / orig_area
+                    # 面积增加显示为红色，减少显示为蓝色
+                    area_diff[opt_markers_np == j] = change_ratio
+            
+            plt.title("Area Change (Red: +, Blue: -)")
+            plt.imshow(area_diff, cmap='coolwarm', vmin=-1, vmax=1)
+            plt.colorbar(label='Area Change Ratio')
+        
+        plt.axis('off')
+    
+    # 创建图例
+    if used_labels:
+        handles = []
+        for class_id in sorted(used_labels):
+            if class_id < len(class_names):
+                patch = mpatches.Patch(color=colors[class_id+1], label=class_names[class_id])
+                handles.append(patch)
+        
+        if handles:
+            plt.figlegend(handles=handles, loc='lower center', ncol=min(5, len(handles)))
+    
+    plt.tight_layout()
+    plt.subplots_adjust(bottom=0.12 if used_labels else 0.05)  # 为图例留出空间
+    
+    # 保存图像
+    plt.savefig(f'debug/Watershed-Comparison-{fileid}.png')
+    plt.close()
+
+    print(f"Comparison visualization saved to debug/Watershed-Comparison-{fileid}.png")
+    
+    return fileid
 
 
 @MODELS.register_module()

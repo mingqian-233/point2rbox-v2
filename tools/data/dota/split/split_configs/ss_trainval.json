@@ -5,8 +5,8 @@
     "../../Data/DOTA/val/images/"
   ],
   "ann_dirs": [
-    "../../Data/DOTA/train/labelTxt-v2.0/",
-    "../../Data/DOTA/val/labelTxt-v2.0/"
+    "../../Data/DOTA/train/labelTxt-v1.0/labelTxt/",
+    "../../Data/DOTA/val/labelTxt-v1.0/labelTxt/"
   ],
   "sizes": [
     1024
@@ -25,6 +25,6 @@
     116,
     124
   ],
-  "save_dir": "data/split_ss_dota2_0/trainval/",
+  "save_dir": "data/split_ss_dota/trainval/",
   "save_ext": ".png"
 }

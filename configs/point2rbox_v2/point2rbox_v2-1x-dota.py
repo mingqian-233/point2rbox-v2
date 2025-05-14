@@ -42,7 +42,7 @@ model = dict(
         strides=[8],
         edge_loss_start_epoch=6,
         joint_angle_start_epoch=1,
-        voronoi_type='standard',
+        voronoi_type='prior_guide',
         voronoi_thres=dict(
             default=[0.994, 0.005],
             override=(([2, 11], [0.999, 0.6]),
@@ -66,11 +66,85 @@ model = dict(
         loss_overlap=dict(
             type='GaussianOverlapLoss', loss_weight=10.0, lamb=0),
         loss_voronoi=dict(
-            type='VoronoiWatershedLoss', loss_weight=5.0),
+            type='VoronoiWatershedLoss', loss_weight=5.0,
+            debug="True"),
         loss_bbox_edg=dict(
             type='EdgeLoss', loss_weight=0.3),
         loss_ss=dict(
-            type='Point2RBoxV2ConsistencyLoss', loss_weight=1.0)),
+            type='Point2RBoxV2ConsistencyLoss', loss_weight=1.0),
+        # 按照classes顺序整理的参数列表
+        size = [
+            25,    # plane
+            70,    # baseball-diamond
+            35,    # bridge
+            450,   # ground-track-field
+            1,     # small-vehicle
+            2,     # large-vehicle
+            6,     # ship
+            20,    # tennis-court
+            20,    # basketball-court
+            13,    # storage-tank
+            200,   # soccer-ball-field
+            40,    # roundabout
+            50,    # harbor
+            12,    # swimming-pool
+            10     # helicopter
+        ],
+        uncertainty = [
+            20,    # plane
+            50,    # baseball-diamond
+            90,    # bridge
+            60,    # ground-track-field
+            30,    # small-vehicle
+            40,    # large-vehicle
+            25,    # ship
+            10,    # tennis-court
+            35,    # basketball-court
+            30,    # storage-tank
+            75,    # soccer-ball-field
+            75,    # roundabout
+            70,    # harbor
+            50,    # swimming-pool
+            80     # helicopter
+        ],
+
+        min_ratio_threshold = [
+            0.1,    # plane
+            0.001,  # baseball-diamond
+            0.1,    # bridge
+            0.9,    # ground-track-field
+            0.5,    # small-vehicle
+            0.6,    # large-vehicle
+            0.05,   # ship
+            0.1,    # tennis-court
+            0.1,    # basketball-court
+            0.25,   # storage-tank
+            0.2,    # soccer-ball-field
+            0.3,    # roundabout
+            0.1,    # harbor
+            0.05,   # swimming-pool
+            0.1     # helicopter
+        ],
+
+        max_ratio_threshold = [
+            0.3,    # plane
+            0.05,   # baseball-diamond
+            0.1,    # bridge
+            0.9,    # ground-track-field
+            0.5,    # small-vehicle
+            0.6,    # large-vehicle
+            0.05,   # ship
+            0.1,    # tennis-court
+            0.1,    # basketball-court
+            0.25,   # storage-tank
+            0.2,    # soccer-ball-field
+            0.3,    # roundabout
+            0.3,    # harbor
+            0.1,    # swimming-pool
+            0.4     # helicopter
+        ]
+
+        ),
     # training and testing settings
     train_cfg=None,
     test_cfg=dict(
@@ -94,7 +168,7 @@ train_pipeline = [
     dict(type='mmdet.PackDetInputs')
 ]
 
-train_dataloader = dict(batch_size=2,
+train_dataloader = dict(batch_size=6,
                         dataset=dict(pipeline=train_pipeline))
 
 # optimizer

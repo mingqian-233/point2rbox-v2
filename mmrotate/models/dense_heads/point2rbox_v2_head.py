@@ -95,6 +95,75 @@ class Point2RBoxV2Head(AnchorFreeHead):
                      type='EdgeLoss', loss_weight=0.3),
                  loss_ss=dict(
                     type='Point2RBoxV2ConsistencyLoss', loss_weight=1.0),
+                 size = [
+                    25,    # plane
+                    70,    # baseball-diamond
+                    35,    # bridge
+                    450,   # ground-track-field
+                    1,     # small-vehicle
+                    2,     # large-vehicle
+                    6,     # ship
+                    20,    # tennis-court
+                    20,    # basketball-court
+                    13,    # storage-tank
+                    200,   # soccer-ball-field
+                    40,    # roundabout
+                    50,    # harbor
+                    12,    # swimming-pool
+                    10     # helicopter
+                ],
+                uncertainty = [
+                    20,    # plane
+                    50,    # baseball-diamond
+                    90,    # bridge
+                    60,    # ground-track-field
+                    30,    # small-vehicle
+                    40,    # large-vehicle
+                    25,    # ship
+                    10,    # tennis-court
+                    35,    # basketball-court
+                    30,    # storage-tank
+                    75,    # soccer-ball-field
+                    75,    # roundabout
+                    70,    # harbor
+                    50,    # swimming-pool
+                    80     # helicopter
+                ],
+                min_ratio_threshold = [
+                    0.1,    # plane
+                    0.001,  # baseball-diamond
+                    0.1,    # bridge
+                    0.9,    # ground-track-field
+                    0.5,    # small-vehicle
+                    0.6,    # large-vehicle
+                    0.05,   # ship
+                    0.1,    # tennis-court
+                    0.1,    # basketball-court
+                    0.25,   # storage-tank
+                    0.2,    # soccer-ball-field
+                    0.3,    # roundabout
+                    0.1,    # harbor
+                    0.05,   # swimming-pool
+                    0.1     # helicopter
+                ],
+
+                max_ratio_threshold = [
+                    0.3,    # plane
+                    0.05,   # baseball-diamond
+                    0.1,    # bridge
+                    0.9,    # ground-track-field
+                    0.5,    # small-vehicle
+                    0.6,    # large-vehicle
+                    0.05,   # ship
+                    0.1,    # tennis-court
+                    0.1,    # basketball-court
+                    0.25,   # storage-tank
+                    0.2,    # soccer-ball-field
+                    0.3,    # roundabout
+                    0.3,    # harbor
+                    0.1,    # swimming-pool
+                    0.4     # helicopter
+                ],
                  norm_cfg=dict(type='GN', num_groups=32, requires_grad=True),
                  init_cfg=dict(
                      type='Normal',
@@ -139,6 +208,10 @@ class Point2RBoxV2Head(AnchorFreeHead):
         self.loss_overlap = MODELS.build(loss_overlap)
         self.loss_voronoi = MODELS.build(loss_voronoi)
         self.loss_bbox_edg = MODELS.build(loss_bbox_edg)
+        self.size=size
+        self.uncertainty=uncertainty
+        self.min_ratio_threshold=min_ratio_threshold
+        self.max_ratio_threshold=max_ratio_threshold
             
     def _init_layers(self):
         """Initialize layers of the head."""
@@ -227,6 +300,7 @@ class Point2RBoxV2Head(AnchorFreeHead):
             dict[str, Tensor]: A dictionary of loss components.
         """
         assert len(cls_scores) == len(bbox_preds) == len(angle_preds)
+
         featmap_sizes = [featmap.size()[-2:] for featmap in cls_scores]
         all_level_points = self.prior_generator.grid_priors(
             featmap_sizes,
@@ -375,9 +449,14 @@ class Point2RBoxV2Head(AnchorFreeHead):
                                 pos_thres[cls] = item[1][0]
                                 neg_thres[cls] = item[1][1]
                     loss_bbox_vor += self.loss_voronoi((mu, sigma.bmm(sigma)),
-                                                       label, self.images[batch_id],
-                                                       pos_thres, neg_thres,
-                                                       voronoi=self.voronoi_type)
+                                                    label, self.images[batch_id],
+                                                    pos_thres, neg_thres,
+                                                    voronoi=self.voronoi_type,
+                                                    size=self.size,
+                                                    uncertainty=self.uncertainty,
+                                                    min_ratio_threshold=self.min_ratio_threshold,
+                                                    max_ratio_threshold=self.max_ratio_threshold)
+
                     self.vis[batch_id] = self.loss_voronoi.vis
             
             #  Batched RBox for Edge Loss
