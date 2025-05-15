@@ -60,7 +60,7 @@ class RotLocalVisualizer(DetLocalVisualizer):
         if 'bboxes' in instances:
             bboxes = instances.bboxes
             labels = instances.labels
-            if labels.dim() == 2:
+            if labels.ndim == 2:
                 labels = labels[:, 0]
 
             max_label = int(max(labels) if len(labels) > 0 else 0)

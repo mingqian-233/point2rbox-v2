@@ -67,7 +67,7 @@ model = dict(
             type='GaussianOverlapLoss', loss_weight=10.0, lamb=0),
         loss_voronoi=dict(
             type='VoronoiWatershedLoss', loss_weight=5.0,
-            debug="True"),
+            debug=False),
         loss_bbox_edg=dict(
             type='EdgeLoss', loss_weight=0.3),
         loss_ss=dict(
@@ -113,10 +113,10 @@ model = dict(
             0.01,  # baseball-diamond
             0.1,    # bridge
             0.9,    # ground-track-field
-            0.8,    # small-vehicle
+            0.9,    # small-vehicle
             0.8,    # large-vehicle
             0.5,   # ship
-            0.1,    # tennis-court
+            0.9,    # tennis-court
             0.1,    # basketball-court
             0.25,   # storage-tank
             0.2,    # soccer-ball-field
@@ -131,10 +131,10 @@ model = dict(
             0.05,   # baseball-diamond
             0.1,    # bridge
             0.9,    # ground-track-field
-            0.8,    # small-vehicle
+            0.9,    # small-vehicle
             0.8,    # large-vehicle
             0.5,   # ship
-            0.1,    # tennis-court
+            0.9,    # tennis-court
             0.1,    # basketball-court
             0.25,   # storage-tank
             0.2,    # soccer-ball-field

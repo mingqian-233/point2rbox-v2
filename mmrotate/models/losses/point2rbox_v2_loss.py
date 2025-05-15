@@ -10,6 +10,7 @@ from mmdet.models.losses.utils import weighted_loss
 from mmrotate.registry import MODELS
 from mmrotate.models.losses.gaussian_dist_loss import postprocess
 
+import matplotlib.pyplot as plt
 
 @weighted_loss
 def gwd_sigma_loss(pred, target, fun='log1p', tau=1.0, alpha=1.0, normalize=True):
@@ -177,13 +178,19 @@ class GaussianOverlapLoss(nn.Module):
             reduction=reduction,
             avg_factor=avg_factor))
 
-
-def plot_gaussian_voronoi_watershed(*images,current_time=None):
-    """Plot figures for debug."""
-    import matplotlib.pyplot as plt
+def plot_gaussian_voronoi_watershed(*images, gt_points=None, current_time=None):
+    """
+    Plot figures for debug.
+    
+    Args:
+        *images: 要显示的图像
+        gt_points: GT点坐标，形状为[N, 2]
+        current_time: 时间戳用于保存文件名
+    """
     plt.figure(dpi=300, figsize=(len(images) * 4, 4))
     plt.tight_layout()
     fileid = np.random.randint(0, 20)
+    
     for i in range(len(images)):
         img = images[i]
         img = (img - img.min()) / (img.max() - img.min())
@@ -191,6 +198,7 @@ def plot_gaussian_voronoi_watershed(*images,current_time=None):
             img = img.permute(1, 2, 0)
         img = img.detach().cpu().numpy()
         plt.subplot(1, len(images), i + 1)
+        
         if i == 3:
             plt.imshow(img)
             x = np.linspace(0, 1024, 1024)
@@ -199,11 +207,24 @@ def plot_gaussian_voronoi_watershed(*images,current_time=None):
             plt.contourf(X, Y, img, levels=8, cmap=plt.get_cmap('magma'))
         else:
             plt.imshow(img)
+            
+        # 如果提供了GT点，则在图像上标记出来
+        if gt_points is not None and i == 0:  # 只在第一张图上标记GT点
+            if isinstance(gt_points, torch.Tensor):
+                points = gt_points.detach().cpu().numpy()
+            else:
+                points = gt_points
+                
+            plt.scatter(points[:, 0], points[:, 1], 
+                       c='red', marker='+', s=100, 
+                       linewidths=2, label='GT Points')
+            plt.legend(loc='upper right')
+            
         plt.xticks([])
         plt.yticks([])
-    plt.savefig(f'debug/Gaussian-Voronoi-{current_time}-1.png')
+        
+    plt.savefig(f'debug/{current_time}-Gaussian-Voronoi-1.png')
     plt.close()
-
 
 def gaussian_2d(xy, mu, sigma, normalize=False):
     dxy = (xy - mu).unsqueeze(-1)
@@ -254,22 +275,22 @@ def gaussian_voronoi_watershed_loss(mu, sigma,
         for j, (m, s) in enumerate(zip(mm, sg)):
             vor[j] = gaussian_2d(xy.view(-1, 2), m[None], s[None]).view(h, w)
     elif voronoi == 'prior_guide':
-        # 加权维诺图，按照size参数进行加权
-        L, V = torch.linalg.eigh(sigma)
-        L = L.detach().clone()
-        L = L / (L[:, 0:1] * L[:, 1:2]).sqrt() * default_sigma
-        sg = V.matmul(torch.diag_embed(L)).matmul(V.permute(0, 2, 1)).detach()
+    # 创建固定的协方差矩阵，类似standard模式
+        sg = sigma.new_tensor((default_sigma, 0, 0, default_sigma)).reshape(2, 2)
         sg = sg / D ** 2
         
-        # 获取每个目标的类别，以便使用对应的size进行加权
+        # 获取每个目标的类别和对应权重
         classes = label.detach().cpu().numpy()
         weights = torch.tensor([size[int(cls)] for cls in classes], device=mu.device)
         
-        for j, (m, s) in enumerate(zip(mm, sg)):
-            # 根据类别对应的size进行权重加成
+        for j, m in enumerate(mm):
+            # 获取该目标的权重
             weight = weights[j]
-            # 用权重调整高斯分布半径
-            vor[j] = gaussian_2d(xy.view(-1, 2), m[None], s[None] / weight).view(h, w) * weight
+            # 调整协方差矩阵
+            adjusted_sg = sg * math.log2(weight*2) 
+            vor[j] = gaussian_2d(xy.view(-1, 2), m[None], adjusted_sg[None]).view(h, w)
+    
+
             
     # val: max prob, vor: belong to which instance, cls: belong to which class
     val, vor = torch.max(vor, 0)
@@ -296,24 +317,49 @@ def gaussian_voronoi_watershed_loss(mu, sigma,
     img_uint8 = img_uint8.permute(1, 2, 0).detach().cpu().numpy().astype(np.uint8)
     img_uint8 = cv2.medianBlur(img_uint8, 3)
     markers = vor.detach().cpu().numpy().astype(np.int32)
-    markers = vor.new_tensor(cv2.watershed(img_uint8, markers))
     
-    # 应用先验约束进行分水岭结果后处理
-    if voronoi == 'prior_guide':
-        ori_markers= markers.detach()
-        markers = apply_prior_constraints(markers, label, size, uncertainty, 
-                                          min_ratio_threshold, max_ratio_threshold, 
-                                          image, J)
-        
+    markers = vor.new_tensor(cv2.watershed(img_uint8, markers))
+            
+            
+    # # 移除边界处的溢出区域
+    
+    # border_width = 1  # 边界宽度
+    # markers_np = markers.detach().cpu().numpy()
+    
+    # # 将图像边界处的标签设为背景或未划分区域
+    # markers_np[0:border_width, :] = J + 1  # 上边界
+    # markers_np[-border_width:, :] = J + 1  # 下边界
+    # markers_np[:, 0:border_width] = J + 1  # 左边界
+    # markers_np[:, -border_width:] = J + 1  # 右边界
+    # # 将处理后的标记转回张量
+    # markers = markers.new_tensor(markers_np)
+    
+    
     # 调取当前时间
     import datetime
     now = datetime.datetime.now()
     current_time = now.strftime("%Y-%m-%d-%H-%M-%S")
 
+    # 应用先验约束进行分水岭结果后处理
+    if voronoi == 'prior_guide':
+        ori_markers= markers.detach()
+        markers = apply_prior_constraints(markers, label, size, uncertainty, 
+                                          min_ratio_threshold, max_ratio_threshold, 
+                                          image, J, current_time, mu.detach(),debug)
+    
     if debug:
-        plot_gaussian_voronoi_watershed(image, cls_bg, markers,current_time=current_time)
-        plot_watershed_result(image, ori_markers,markers, label,current_time)
-
+        plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+        plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+        # 创建GT中心点字典用于可视化
+        gt_centers_viz = {}
+        mu_np = mu.detach().cpu().numpy()
+        for j in range(J):
+            gt_centers_viz[j] = (mu_np[j][1], mu_np[j][0])  # 转换为(y,x)格式
+                
+        # 绘制结果并传递GT中心点
+        plot_gaussian_voronoi_watershed(image, cls_bg, markers, gt_points=mu, current_time=current_time)
+        plot_watershed_result(image, ori_markers, markers, label, current_time, gt_centers=gt_centers_viz)
+        
     L, V = torch.linalg.eigh(sigma)
     L_target = []
     for j in range(J):
@@ -332,11 +378,221 @@ def gaussian_voronoi_watershed_loss(mu, sigma,
     loss = gwd_sigma_loss(L, L_target.detach(), reduction='none')
     loss = torch.topk(loss, int(np.ceil(len(loss) * topk)), largest=False)[0].mean()
     return loss, (vor, markers)
+def region_rotate_replace(markers, label_id, target_area, image, objects, current_time, gt_centers,debug=False):
+    """
+    形状旋转替代算法，用最接近平均面积的目标形状旋转后替代异常目标，
+    保持原始GT中心点位置不变
+    
+    Args:
+        markers: 分水岭的结果
+        label_id: 需要替换的标签ID
+        target_area: 目标面积
+        image: 原始图像
+        objects: 该类别的所有目标 (j, area) 列表
+        current_time: 时间戳用于保存调试图像
+        gt_centers: 每个目标的GT中心点 {label_id: (y, x)}
+    """
+    import matplotlib.pyplot as plt
+    current_mask = markers == label_id
+    current_area = np.sum(current_mask)
+    
 
+    
+    if current_area <= target_area:
+        return markers
+    
+    # 保存原始掩码用于可视化
+    original_mask = current_mask.copy()
+    
+    # 1. 找出最接近平均面积的目标
+    areas = [area for _, area in objects]
+    mean_area = np.mean(areas)
+    
+    # 排除当前异常目标
+    reference_objects = [(j, area) for j, area in objects if j+1 != label_id]
+    
+    if not reference_objects:
+        return region_erode(markers, label_id, target_area, current_time)
+    
+    # 找出最接近平均面积的目标
+    reference_j, reference_area = min(reference_objects, key=lambda x: abs(x[1] - mean_area))
+    reference_id = reference_j + 1
+    reference_mask = markers == reference_id
+    
+    # 2. 获取中心点 - 使用GT中心点或计算中心点
+    y_curr, x_curr = np.where(current_mask)
+    y_ref, x_ref = np.where(reference_mask)
+    
+    if len(y_curr) == 0 or len(y_ref) == 0:
+        return region_erode(markers, label_id, target_area, current_time)
+    
+    # 使用GT中心点
+    curr_center_y, curr_center_x = gt_centers[label_id-1]
+    # 计算参考目标的中心点
+    ref_center_y = np.mean(y_ref)
+    ref_center_x = np.mean(x_ref)
+    
+    # 3. 对两个目标做PCA分析，获取主方向
+    curr_points = np.vstack([y_curr - curr_center_y, x_curr - curr_center_x]).T
+    ref_points = np.vstack([y_ref - ref_center_y, x_ref - ref_center_x]).T
+    
+    # 对当前目标做PCA分析
+    curr_cov = np.cov(curr_points.T)
+    curr_evals, curr_evecs = np.linalg.eigh(curr_cov)
+    curr_idx = np.argsort(curr_evals)[::-1]  # 降序排列
+    curr_evecs = curr_evecs[:, curr_idx]
+    curr_evals = curr_evals[curr_idx]
+    
+    # 对参考目标做PCA分析
+    ref_cov = np.cov(ref_points.T)
+    ref_evals, ref_evecs = np.linalg.eigh(ref_cov)
+    ref_idx = np.argsort(ref_evals)[::-1]  # 降序排列
+    ref_evecs = ref_evecs[:, ref_idx]
+    ref_evals = ref_evals[ref_idx]
+    
+    # 4. 计算旋转变换矩阵
+    # 计算主方向的夹角
+    curr_main_dir = curr_evecs[:, 0]
+    ref_main_dir = ref_evecs[:, 0]
+    
+    cos_angle = np.dot(curr_main_dir, ref_main_dir) / (np.linalg.norm(curr_main_dir) * np.linalg.norm(ref_main_dir))
+    cos_angle = np.clip(cos_angle, -1.0, 1.0)
+    theta = np.arccos(cos_angle)
+    
+    # 检查是否需要改变旋转方向
+    cross_product = np.cross(ref_main_dir, curr_main_dir)
+    if cross_product < 0:
+        theta = -theta
+    
+    # 计算缩放系数 (为了达到目标面积)
+    scale_factor = np.sqrt(target_area / reference_area)
+    
+    # 创建旋转矩阵
+    rotation_matrix = np.array([
+        [np.cos(theta), -np.sin(theta)],
+        [np.sin(theta), np.cos(theta)]
+    ])
+    
+    # 5. 执行变换并创建新掩码
+    # 创建空白掩码
+    new_mask = np.zeros_like(markers)
+    
+    # 对参考掩码中的每个点进行变换，但保持中心点为GT中心点
+    for y, x in zip(y_ref, x_ref):
+        # 相对于参考中心的坐标
+        rel_y = y - ref_center_y
+        rel_x = x - ref_center_x
+        
+        # 旋转和缩放
+        point = np.array([rel_y, rel_x])
+        transformed_point = rotation_matrix @ point * scale_factor
+        
+        # 计算在新掩码中的坐标 - 使用GT中心点
+        new_y = int(transformed_point[0] + curr_center_y)
+        new_x = int(transformed_point[1] + curr_center_x)
+        
+        # 确保在图像范围内
+        if 0 <= new_y < markers.shape[0] and 0 <= new_x < markers.shape[1]:
+            new_mask[new_y, new_x] = 1
+    
+    # 确保没有断开的区域，进行形态学闭操作
+    new_mask = new_mask.astype(np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
+    new_mask = cv2.morphologyEx(new_mask, cv2.MORPH_CLOSE, kernel)
+    
+    # 确保连通性 - 只保留最大的连通区域
+    num_labels, labels = cv2.connectedComponents(new_mask)
+    if num_labels > 1:
+        max_label = 1
+        max_size = 0
+        for i in range(1, num_labels):
+            size = np.sum(labels == i)
+            if size > max_size:
+                max_size = size
+                max_label = i
+        new_mask = (labels == max_label).astype(np.uint8)
+    
+    # 获取最终面积
+    final_area = np.sum(new_mask)
+    
+    # 检查最终面积是否接近目标面积
+    if abs(final_area - target_area) > 0.1 * target_area:
+        # 进行二次调整，通过迭代缩放来达到目标面积
+        adjustment_attempts = 3
+        for attempt in range(adjustment_attempts):
+            if abs(final_area - target_area) <= 0.05 * target_area:
+                break  # 已经足够接近
+                
+            # 更新缩放系数
+            scale_factor = scale_factor * np.sqrt(target_area / final_area)
+            
+            # 重新创建掩码
+            new_mask = np.zeros_like(markers)
+            for y, x in zip(y_ref, x_ref):
+                rel_y = y - ref_center_y
+                rel_x = x - ref_center_x
+                point = np.array([rel_y, rel_x])
+                transformed_point = rotation_matrix @ point * scale_factor
+                new_y = int(transformed_point[0] + curr_center_y)
+                new_x = int(transformed_point[1] + curr_center_x)
+                if 0 <= new_y < markers.shape[0] and 0 <= new_x < markers.shape[1]:
+                    new_mask[new_y, new_x] = 1
+            
+            # 再次进行形态学操作确保完整性
+            new_mask = new_mask.astype(np.uint8)
+            new_mask = cv2.morphologyEx(new_mask, cv2.MORPH_CLOSE, kernel)
+            
+            # 只保留最大连通区域
+            num_labels, labels = cv2.connectedComponents(new_mask)
+            if num_labels > 1:
+                max_label = max(range(1, num_labels), key=lambda i: np.sum(labels == i))
+                new_mask = (labels == max_label).astype(np.uint8)
+            
+            final_area = np.sum(new_mask)
+    
+    # 更新标记
+    modified_markers = markers.copy()
+    modified_markers[current_mask] = 0  # 清除原标记
+    modified_markers[new_mask > 0] = label_id  # 添加新标记
+    
+    if debug:
+        # 可视化变换结果
+        plt.figure(figsize=(15, 5))
+        
+        # 原始掩码
+        plt.subplot(1, 3, 1)
+        plt.imshow(original_mask, cmap='gray')
+        plt.plot(curr_center_x, curr_center_y, 'r+', markersize=10)  # 标记GT中心点
+        plt.title(f'原始目标 (标签 {label_id})\n面积: {current_area}')
+        
+        # 参考掩码
+        plt.subplot(1, 3, 2)
+        plt.imshow(reference_mask, cmap='gray')
+        plt.plot(ref_center_x, ref_center_y, 'g+', markersize=10)  # 标记参考中心点
+        plt.title(f'参考目标 (标签 {reference_id})\n面积: {reference_area}')
+        
+        # 变换后掩码
+        plt.subplot(1, 3, 3)
+        plt.imshow(new_mask, cmap='gray')
+        plt.plot(curr_center_x, curr_center_y, 'r+', markersize=10)  # 标记GT中心点
+        plt.title(f'旋转替代结果\n面积: {final_area} (目标: {target_area:.2f})')
+        
+        plt.suptitle(f'形状旋转替代 - 标签 {label_id} (保持GT中心点)', fontsize=16)
+        plt.tight_layout()
+        plt.savefig(f'debug/Rotate_Replace_Label{label_id}_{current_time}.png')
+        plt.close()
+        
+        print(f"形状旋转替代完成: 原面积 {current_area} -> 新面积 {final_area}")
+        print(f"目标面积: {target_area:.2f}, 参考面积: {reference_area}")
+        print(f"GT中心点位置保持不变")
+        print(f"调试图像已保存到debug目录")
+        
+    return modified_markers
 
+# 在apply_prior_constraints函数中，我们需要修改调用方式，传入GT中心点
 def apply_prior_constraints(markers, label, size, uncertainty, 
                            min_ratio_threshold, max_ratio_threshold, 
-                           image, J):
+                           image, J, current_time, mu,debug):
     """
     根据先验约束调整分水岭的结果
     
@@ -349,10 +605,21 @@ def apply_prior_constraints(markers, label, size, uncertainty,
         max_ratio_threshold: 与平均值的最大比例阈值
         image: 原始图像
         J: 目标的数量
+        current_time: 时间戳
+        mu: GT中心点 - shape为[J, 2]，坐标为(y, x)
     """
     # 从GPU转到CPU处理
     markers_np = markers.detach().cpu().numpy()
     label_np = label.detach().cpu().numpy()
+    
+    # 创建GT中心点字典
+    gt_centers = {}
+    if mu is not None and isinstance(mu, torch.Tensor):
+        mu_np = mu.detach().cpu().numpy()
+        for j in range(J):
+            if j < len(mu_np):
+                # 注意：mu中的坐标是(x,y)，而我们需要(y,x)
+                gt_centers[j] = (mu_np[j][1], mu_np[j][0])
     
     # 按类别分组目标
     class_groups = {}
@@ -386,8 +653,8 @@ def apply_prior_constraints(markers, label, size, uncertainty,
                         # 区域生长直到达到阈值
                         modified_markers = region_grow(modified_markers, j+1, min_area, image)
                     elif area > max_area:
-                        # 形态学腐蚀
-                        modified_markers = region_erode(modified_markers, j+1, max_area)
+                        # 使用形状旋转替代方法代替腐蚀
+                        modified_markers = region_rotate_replace(modified_markers, j+1, max_area, image, objects, current_time,gt_centers,debug)
         
         # 处理只有一个实例的类别，它们需要与其他类别进行比较
         single_instance_classes = {cls: objs[0] for cls, objs in class_groups.items() if len(objs) == 1}
@@ -425,23 +692,33 @@ def apply_prior_constraints(markers, label, size, uncertainty,
                             # 区域1需要扩大
                             modified_markers = region_grow(modified_markers, j1+1, area1 + delta_area1, image)
                         elif delta_area1 < 0:
-                            # 区域1需要缩小
-                            modified_markers = region_erode(modified_markers, j1+1, area1 + delta_area1)
+                            # 区域1需要缩小 - 使用旋转替代方法
+                            obj1 = [(j1, area1)]
+                            if len(class_groups[cls1]) > 1:
+                                obj1 = class_groups[cls1]
+                            modified_markers = region_rotate_replace(modified_markers, j1+1, area1 + delta_area1, image, obj1, current_time,gt_centers,debug)
                             
                         if delta_area2 > 0:
                             # 区域2需要扩大
                             modified_markers = region_grow(modified_markers, j2+1, area2 + delta_area2, image)
                         elif delta_area2 < 0:
-                            # 区域2需要缩小
-                            modified_markers = region_erode(modified_markers, j2+1, area2 + delta_area2)
-    
+                            # 区域2需要缩小 - 使用旋转替代方法
+                            obj2 = [(j2, area2)]
+                            if len(class_groups[cls2]) > 1:
+                                obj2 = class_groups[cls2]
+                            modified_markers = region_rotate_replace(modified_markers, j2+1, area2 + delta_area2, image, obj2, current_time,gt_centers,debug)
+     
     # 情况2: 处理同一图片只有一种目标类别的情况
     elif len(class_groups) == 1:
+        single_instance_classes = {cls: objs[0] for cls, objs in class_groups.items() if len(objs) == 1}
+        if len(single_instance_classes) == 1:
+            return markers
+        
         cls = list(class_groups.keys())[0]
         objects = class_groups[cls]
         
-        # 只处理不确定度大于0.5的类别
-        if uncertainty[cls] >= 0.5:
+        # 只处理不确定度大于0的类别
+        if uncertainty[cls] >= 0:
             if len(objects) > 1:
                 # 计算平均面积
                 areas = [area for _, area in objects]
@@ -457,8 +734,8 @@ def apply_prior_constraints(markers, label, size, uncertainty,
                         # 区域生长直到达到阈值
                         modified_markers = region_grow(modified_markers, j+1, min_area, image)
                     elif area > max_area:
-                        # 形态学腐蚀
-                        modified_markers = region_erode(modified_markers, j+1, max_area)
+                        # 使用形状旋转替代方法代替腐蚀
+                        modified_markers = region_rotate_replace(modified_markers, j+1, max_area, image, objects, current_time,gt_centers,debug)
     
     # 将处理后的结果转回PyTorch tensor
     return torch.tensor(modified_markers, device=markers.device, dtype=markers.dtype)
@@ -546,15 +823,20 @@ def region_grow(markers, label_id, target_area, image):
     
     return markers_copy
 
-def region_erode(markers, label_id, target_area):
+def region_erode(markers, label_id, target_area,timestamp):
     """
     形态学腐蚀算法，减小目标区域直到达到目标面积
     """
+    import matplotlib.pyplot as plt
+    
     current_mask = markers == label_id
     current_area = np.sum(current_mask)
-    
+
     if current_area <= target_area:
         return markers
+    
+    # 保存原始掩码用于可视化
+    original_mask = current_mask.copy()
     
     # 转换为OpenCV格式
     mask = current_mask.astype(np.uint8) * 255
@@ -562,30 +844,52 @@ def region_erode(markers, label_id, target_area):
     # 创建不同尺度的结构元素用于腐蚀
     kernel_small = np.ones((3, 3), np.uint8)
     kernel_medium = np.ones((5, 5), np.uint8)
+    kernel_large = np.ones((7, 7), np.uint8)  # 添加更大的内核
     
     # 逐步腐蚀直到达到目标面积
     iterations = 0
     max_iterations = 50  # 防止无限循环
     
+    # 记录腐蚀的历史
+    history = [(iterations, current_area, 0)]
+    masks_history = [current_mask.copy()]
+    
     while current_area > target_area and iterations < max_iterations:
         if iterations < 10:
             # 前10次使用小内核
-            mask_eroded = cv2.erode(mask, kernel_small, iterations=1)
+            kernel = kernel_small
+            kernel_name = "小内核(3x3)"
+            mask_eroded = cv2.erode(mask, kernel, iterations=1)
+        elif iterations < 20:
+            # 中等内核
+            kernel = kernel_medium
+            kernel_name = "中等内核(5x5)"
+            mask_eroded = cv2.erode(mask, kernel, iterations=1)
         else:
-            # 之后使用中等内核
-            mask_eroded = cv2.erode(mask, kernel_medium, iterations=1)
+            # 大内核
+            kernel = kernel_large
+            kernel_name = "大内核(7x7)"
+            mask_eroded = cv2.erode(mask, kernel, iterations=1)
             
         # 更新当前掩码和面积
         new_mask = mask_eroded > 0
         new_area = np.sum(new_mask)
-        
+        area_reduction = current_area - new_area
+    
         if new_area < current_area:
             # 更新标记
             markers_copy = markers.copy()
-            markers_copy[current_mask & ~new_mask] = 0  # 移除腐蚀掉的部分
+            removed_pixels = current_mask & ~new_mask
+
+            markers_copy[removed_pixels] = 0  # 移除腐蚀掉的部分
             markers = markers_copy
             current_mask = new_mask
             current_area = new_area
+            mask = mask_eroded
+            
+            # 记录历史
+            history.append((iterations+1, current_area, area_reduction))
+            masks_history.append(current_mask.copy())
         else:
             # 无法进一步减小
             break
@@ -596,6 +900,7 @@ def region_erode(markers, label_id, target_area):
         if current_area <= 1.05 * target_area:
             break
     
+
     return markers
 
 @MODELS.register_module()
@@ -711,22 +1016,21 @@ def plot_edge_map(feat, edgex, edgey):
         plt.yticks([])
     plt.savefig(f'debug/Edge-Map-{fileid}.png')
     plt.close()
-def plot_watershed_result(image, original_markers, optimized_markers, labels,current_time, edgex=None, edgey=None):
+def plot_watershed_result(image, original_markers, optimized_markers, labels, current_time, gt_centers=None, edgex=None, edgey=None):
     """
     绘制原始分水岭结果与优化后结果的对比，并标注类别
-    
-    Args:
-        image (torch.Tensor): 原始图像，形状为 [C, H, W]
-        original_markers (torch.Tensor): 原始分水岭结果，形状为 [H, W]
-        optimized_markers (torch.Tensor): 优化后的分水岭结果，形状为 [H, W]
-        labels (torch.Tensor): 每个目标的类别，形状为 [N]
-        edgex (torch.Tensor, optional): X方向边缘图
-        edgey (torch.Tensor, optional): Y方向边缘图
     """
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
     import numpy as np
     from matplotlib.colors import ListedColormap
+    
+    # 设置字体支持中文显示
+    try:
+        plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
+        plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+    except:
+        print("警告: 无法设置中文字体，可能无法正确显示中文")
     
     # 类别名称列表
     class_names = [
@@ -767,23 +1071,87 @@ def plot_watershed_result(image, original_markers, optimized_markers, labels,cur
         labels_np = labels.cpu().numpy()
     else:
         labels_np = labels
+        
+    # 计算所有目标的中心点
+    centers_orig = []
+    for j in range(1, orig_markers_np.max() + 1):
+        if j - 1 < len(labels_np):
+            y_indices, x_indices = np.where(orig_markers_np == j)
+            if len(y_indices) > 0:
+                y_center = int(np.mean(y_indices))
+                x_center = int(np.mean(x_indices))
+                centers_orig.append((x_center, y_center))
+                
+    # 计算优化后的中心点
+    centers_opt = []
+    for j in range(1, opt_markers_np.max() + 1):
+        if j - 1 < len(labels_np):
+            y_indices, x_indices = np.where(opt_markers_np == j)
+            if len(y_indices) > 0:
+                y_center = int(np.mean(y_indices))
+                x_center = int(np.mean(x_indices))
+                centers_opt.append((x_center, y_center))
+    
+    # 计算每个目标的面积变化比例 - 提前计算area_diff
+    area_diff = np.zeros_like(opt_markers_np, dtype=float)
+    for j in range(1, max(orig_markers_np.max(), opt_markers_np.max()) + 1):
+        orig_area = np.sum(orig_markers_np == j)
+        opt_area = np.sum(opt_markers_np == j)
+        
+        if orig_area > 0 and opt_area > 0:
+            # 标记优化后区域的面积变化比例
+            change_ratio = (opt_area - orig_area) / orig_area
+            # 面积增加显示为红色，减少显示为蓝色
+            area_diff[opt_markers_np == j] = change_ratio
     
     # 创建3x2的子图布局
     # 原始图像
     plt.subplot(2, 3, 1)
-    plt.title("Original Image")
+    plt.title("原始图像")
     plt.imshow(img)
-    plt.axis('off')
+
+    # 在原图上显示中心点
+    if centers_orig:
+        centers = np.array(centers_orig)
+        plt.scatter(centers[:, 0], centers[:, 1], 
+                c='red', marker='+', s=80, 
+                linewidths=1.5, label='中心点')
     
+    # 显示GT中心点
+    if gt_centers is not None:
+        gt_points = []
+        for j in range(len(labels_np)):
+            if j in gt_centers:
+                y, x = gt_centers[j]
+                gt_points.append((x, y))
+                plt.plot(x, y, 'rx', markersize=12, markeredgewidth=2)
+                plt.text(x+5, y+5, f"GT{j+1}", color='red', fontsize=8,
+                       bbox=dict(boxstyle="round,pad=0.2", fc='white', alpha=0.7))
+        
+        if gt_points:
+            # 添加GT中心点图例
+            plt.plot([], [], 'rx', markersize=10, label='GT中心点')
+            plt.legend(loc='upper right')
+
+    plt.axis('off')
+        
     # 原始分水岭结果
     plt.subplot(2, 3, 2)
-    plt.title("Original Watershed")
+    plt.title("原始分水岭结果")
     plt.imshow(orig_markers_np, cmap=cmap)
+    
+    # 标记原始中心点
+    if centers_orig:
+        centers = np.array(centers_orig)
+        plt.scatter(centers[:, 0], centers[:, 1], 
+                   c='white', marker='+', s=80, 
+                   linewidths=1.5, label='中心点')
+                   
     plt.axis('off')
     
     # 带标签的原始分水岭结果
     plt.subplot(2, 3, 3)
-    plt.title("Original Watershed (Labeled)")
+    plt.title("带标签的原始分水岭结果")
     plt.imshow(orig_markers_np, cmap=cmap, alpha=0.7)
     plt.imshow(img, alpha=0.3)
     
@@ -800,24 +1168,82 @@ def plot_watershed_result(image, original_markers, optimized_markers, labels,cur
                 if class_id < len(class_names):
                     class_name = class_names[class_id]
                 else:
-                    class_name = f"Class {class_id}"
+                    class_name = f"类别 {class_id}"
                 
                 plt.text(x_center, y_center, class_name, 
                          color='white', fontsize=8, 
                          ha='center', va='center',
                          bbox=dict(boxstyle="round,pad=0.3", fc='black', alpha=0.7))
                 used_labels.add(class_id)
+                
+                # 标出中心点
+                plt.plot(x_center, y_center, 'w+', markersize=8)
+                
+    plt.axis('off')
+    
+    # 中心点与面积变化比较
+    plt.subplot(2, 3, 4)
+    plt.title("面积变化与中心点比较")
+    plt.imshow(area_diff, cmap='coolwarm', vmin=-1, vmax=1)
+    plt.colorbar(label='面积变化比例')
+    
+    # 如果有原始和优化后的中心点，以及GT中心点
+    if centers_orig and centers_opt and len(centers_orig) == len(centers_opt):
+        # 原始中心点
+        centers_o = np.array(centers_orig)
+        plt.scatter(centers_o[:, 0], centers_o[:, 1], 
+                   c='yellow', marker='o', s=40, 
+                   linewidths=1, label='原始掩码中心')
+        
+        # 优化后中心点
+        centers_p = np.array(centers_opt)
+        plt.scatter(centers_p[:, 0], centers_p[:, 1], 
+                   c='green', marker='x', s=40, 
+                   linewidths=1, label='优化后掩码中心')
+        
+        # 同时显示GT中心点
+        if gt_centers is not None:
+            gt_points = []
+            for j in range(len(labels_np)):
+                if j in gt_centers:
+                    y, x = gt_centers[j]
+                    gt_points.append((x, y))
+            
+            if gt_points:
+                gt_points = np.array(gt_points)
+                plt.scatter(gt_points[:, 0], gt_points[:, 1],
+                           c='red', marker='*', s=100,
+                           linewidths=1, label='GT中心点')
+        
+        # 用箭头连接原始中心和优化后中心，显示移动方向
+        for i in range(len(centers_orig)):
+            plt.arrow(centers_orig[i][0], centers_orig[i][1], 
+                     centers_opt[i][0] - centers_orig[i][0], 
+                     centers_opt[i][1] - centers_orig[i][1],
+                     color='white', width=0.5, head_width=5, 
+                     length_includes_head=True, alpha=0.7)
+        
+        plt.legend(loc='upper right')
+    
     plt.axis('off')
     
     # 优化后的分水岭结果
     plt.subplot(2, 3, 5)
-    plt.title("Optimized Watershed")
+    plt.title("优化后的分水岭结果")
     plt.imshow(opt_markers_np, cmap=cmap)
+    
+    # 标记优化后的中心点
+    if centers_opt:
+        centers = np.array(centers_opt)
+        plt.scatter(centers[:, 0], centers[:, 1], 
+                   c='white', marker='+', s=80, 
+                   linewidths=1.5, label='中心点')
+    
     plt.axis('off')
     
     # 带标签的优化分水岭结果
     plt.subplot(2, 3, 6)
-    plt.title("Optimized Watershed (Labeled)")
+    plt.title("带标签的优化分水岭结果")
     plt.imshow(opt_markers_np, cmap=cmap, alpha=0.7)
     plt.imshow(img, alpha=0.3)
     
@@ -833,50 +1259,18 @@ def plot_watershed_result(image, original_markers, optimized_markers, labels,cur
                 if class_id < len(class_names):
                     class_name = class_names[class_id]
                 else:
-                    class_name = f"Class {class_id}"
+                    class_name = f"类别 {class_id}"
                 
                 plt.text(x_center, y_center, class_name, 
                          color='white', fontsize=8, 
                          ha='center', va='center',
                          bbox=dict(boxstyle="round,pad=0.3", fc='black', alpha=0.7))
                 used_labels.add(class_id)
-    plt.axis('off')
-    
-    # 如果有边缘图，则显示
-    if edgex is not None and edgey is not None:
-        plt.subplot(2, 3, 4)
-        plt.title("Edge Map")
-        
-        if isinstance(edgex, torch.Tensor) and isinstance(edgey, torch.Tensor):
-            img1 = edgex[0, :3]
-            img1 = (img1 - img1.min()) / (img1.max() - img1.min())
-            img2 = edgey[0, :3]
-            img2 = (img2 - img2.min()) / (img2.max() - img2.min())
-            img3 = img1 + img2
-            img3 = (img3 - img3.min()) / (img3.max() - img3.min())
-            
-            edge_img = img3.permute(1, 2, 0).detach().cpu().numpy()
-            plt.imshow(edge_img)
-        else:
-            # 如果没有提供边缘图，则显示面积变化对比图
-            area_diff = np.zeros_like(opt_markers_np, dtype=float)
-            
-            # 计算每个目标的面积变化比例
-            for j in range(1, max(orig_markers_np.max(), opt_markers_np.max()) + 1):
-                orig_area = np.sum(orig_markers_np == j)
-                opt_area = np.sum(opt_markers_np == j)
                 
-                if orig_area > 0 and opt_area > 0:
-                    # 标记优化后区域的面积变化比例
-                    change_ratio = (opt_area - orig_area) / orig_area
-                    # 面积增加显示为红色，减少显示为蓝色
-                    area_diff[opt_markers_np == j] = change_ratio
-            
-            plt.title("Area Change (Red: +, Blue: -)")
-            plt.imshow(area_diff, cmap='coolwarm', vmin=-1, vmax=1)
-            plt.colorbar(label='Area Change Ratio')
-        
-        plt.axis('off')
+                # 标出中心点
+                plt.plot(x_center, y_center, 'w+', markersize=8)
+                
+    plt.axis('off')
     
     # 创建图例
     if used_labels:
@@ -893,13 +1287,12 @@ def plot_watershed_result(image, original_markers, optimized_markers, labels,cur
     plt.subplots_adjust(bottom=0.12 if used_labels else 0.05)  # 为图例留出空间
     
     # 保存图像
-    plt.savefig(f'debug/Watershed-Comparison-{current_time}-2.png')
+    plt.savefig(f'debug/{current_time}-Gaussian-Voronoi-2.png')
     plt.close()
 
-    print(f"Comparison visualization saved to debug/Watershed-Comparison-{current_time}.png")
+    print(f"分水岭结果对比可视化已保存至 debug/{current_time}-Gaussian-Voronoi-2.png")
     
     return fileid
-
 
 @MODELS.register_module()
 class EdgeLoss(nn.Module):
