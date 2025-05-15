@@ -524,7 +524,11 @@ def region_rotate_replace(markers, label_id, target_area, image, objects, curren
                 break  # 已经足够接近
                 
             # 更新缩放系数
-            scale_factor = scale_factor * np.sqrt(target_area / final_area)
+            if final_area > 0:  # 防止除以零
+                scale_factor = scale_factor * np.sqrt(target_area / final_area)
+            else:
+                # 如果面积为零，使用一个安全的缩放值
+                scale_factor = 1.0  # 或者其他合理的默认值
             
             # 重新创建掩码
             new_mask = np.zeros_like(markers)
@@ -533,10 +537,12 @@ def region_rotate_replace(markers, label_id, target_area, image, objects, curren
                 rel_x = x - ref_center_x
                 point = np.array([rel_y, rel_x])
                 transformed_point = rotation_matrix @ point * scale_factor
-                new_y = int(transformed_point[0] + curr_center_y)
-                new_x = int(transformed_point[1] + curr_center_x)
-                if 0 <= new_y < markers.shape[0] and 0 <= new_x < markers.shape[1]:
-                    new_mask[new_y, new_x] = 1
+                if np.isfinite(transformed_point[0]) and np.isfinite(transformed_point[1]):
+                    new_y = int(transformed_point[0] + curr_center_y)
+                    new_x = int(transformed_point[1] + curr_center_x)
+                    # 确保在图像范围内
+                    if 0 <= new_y < markers.shape[0] and 0 <= new_x < markers.shape[1]:
+                        new_mask[new_y, new_x] = 1
             
             # 再次进行形态学操作确保完整性
             new_mask = new_mask.astype(np.uint8)
