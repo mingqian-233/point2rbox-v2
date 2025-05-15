@@ -378,189 +378,164 @@ def gaussian_voronoi_watershed_loss(mu, sigma,
     loss = gwd_sigma_loss(L, L_target.detach(), reduction='none')
     loss = torch.topk(loss, int(np.ceil(len(loss) * topk)), largest=False)[0].mean()
     return loss, (vor, markers)
-def region_rotate_replace(markers, label_id, target_area, image, objects, current_time, gt_centers,debug=False):
-    """
-    形状旋转替代算法，用最接近平均面积的目标形状旋转后替代异常目标，
-    保持原始GT中心点位置不变
-    
-    Args:
-        markers: 分水岭的结果
-        label_id: 需要替换的标签ID
-        target_area: 目标面积
-        image: 原始图像
-        objects: 该类别的所有目标 (j, area) 列表
-        current_time: 时间戳用于保存调试图像
-        gt_centers: 每个目标的GT中心点 {label_id: (y, x)}
-    """
-    import matplotlib.pyplot as plt
+def region_rotate_replace(markers, label_id, target_area, image, objects, current_time, gt_centers, debug=False):
+    """优化后的形状旋转替代算法"""
+    # 快速路径：如果面积已经小于目标值，直接返回
     current_mask = markers == label_id
     current_area = np.sum(current_mask)
-    
-
     
     if current_area <= target_area:
         return markers
     
-    # 保存原始掩码用于可视化
-    original_mask = current_mask.copy()
+    # 跳过调试相关代码
+    if not debug:
+        original_mask = None
+    else:
+        original_mask = current_mask.copy()
     
-    # 1. 找出最接近平均面积的目标
+    # 1. 尽早退出 - 找不到参考对象时使用简单的腐蚀
+    reference_objects = [(j, area) for j, area in objects if j+1 != label_id]
+    if not reference_objects:
+        return simple_region_erode(markers, label_id, target_area)
+    
+    # 2. 优化参考对象选择 - 预先计算平均面积
     areas = [area for _, area in objects]
     mean_area = np.mean(areas)
-    
-    # 排除当前异常目标
-    reference_objects = [(j, area) for j, area in objects if j+1 != label_id]
-    
-    if not reference_objects:
-        return region_erode(markers, label_id, target_area, current_time)
-    
-    # 找出最接近平均面积的目标
     reference_j, reference_area = min(reference_objects, key=lambda x: abs(x[1] - mean_area))
     reference_id = reference_j + 1
     reference_mask = markers == reference_id
     
-    # 2. 获取中心点 - 使用GT中心点或计算中心点
+    # 3. 获取中心点 - 使用预计算值避免重复计算
     y_curr, x_curr = np.where(current_mask)
+    if len(y_curr) == 0:
+        return simple_region_erode(markers, label_id, target_area)
+        
     y_ref, x_ref = np.where(reference_mask)
+    if len(y_ref) == 0:
+        return simple_region_erode(markers, label_id, target_area)
     
-    if len(y_curr) == 0 or len(y_ref) == 0:
-        return region_erode(markers, label_id, target_area, current_time)
-    
-    # 使用GT中心点
+    # 使用预先存储的GT中心点
     curr_center_y, curr_center_x = gt_centers[label_id-1]
-    # 计算参考目标的中心点
     ref_center_y = np.mean(y_ref)
     ref_center_x = np.mean(x_ref)
     
-    # 3. 对两个目标做PCA分析，获取主方向
+    # 4. 优化PCA计算 - 使用向量化操作
+    # 预计算点集
     curr_points = np.vstack([y_curr - curr_center_y, x_curr - curr_center_x]).T
     ref_points = np.vstack([y_ref - ref_center_y, x_ref - ref_center_x]).T
     
-    # 对当前目标做PCA分析
+    # 计算协方差矩阵
     curr_cov = np.cov(curr_points.T)
-    curr_evals, curr_evecs = np.linalg.eigh(curr_cov)
-    curr_idx = np.argsort(curr_evals)[::-1]  # 降序排列
-    curr_evecs = curr_evecs[:, curr_idx]
-    curr_evals = curr_evals[curr_idx]
-    
-    # 对参考目标做PCA分析
     ref_cov = np.cov(ref_points.T)
-    ref_evals, ref_evecs = np.linalg.eigh(ref_cov)
-    ref_idx = np.argsort(ref_evals)[::-1]  # 降序排列
-    ref_evecs = ref_evecs[:, ref_idx]
-    ref_evals = ref_evals[ref_idx]
     
-    # 4. 计算旋转变换矩阵
-    # 计算主方向的夹角
+    # 一次性计算特征值和特征向量
+    curr_evals, curr_evecs = np.linalg.eigh(curr_cov)
+    ref_evals, ref_evecs = np.linalg.eigh(ref_cov)
+    
+    # 优化排序和主方向计算
+    curr_idx = np.argsort(curr_evals)[::-1]
+    ref_idx = np.argsort(ref_evals)[::-1]
+    curr_evecs = curr_evecs[:, curr_idx]
+    ref_evecs = ref_evecs[:, ref_idx]
+    
     curr_main_dir = curr_evecs[:, 0]
     ref_main_dir = ref_evecs[:, 0]
     
+    # 5. 简化旋转计算
     cos_angle = np.dot(curr_main_dir, ref_main_dir) / (np.linalg.norm(curr_main_dir) * np.linalg.norm(ref_main_dir))
     cos_angle = np.clip(cos_angle, -1.0, 1.0)
     theta = np.arccos(cos_angle)
     
-    # 检查是否需要改变旋转方向
-    cross_product = np.cross(ref_main_dir, curr_main_dir)
-    if cross_product < 0:
+    # 检查旋转方向
+    if np.cross(ref_main_dir, curr_main_dir) < 0:
         theta = -theta
     
-    # 计算缩放系数 (为了达到目标面积)
+    # 6. 简化缩放系数计算
     scale_factor = np.sqrt(target_area / reference_area)
     
-    # 创建旋转矩阵
+    # 7. 减少矩阵运算 - 预计算旋转矩阵
     rotation_matrix = np.array([
         [np.cos(theta), -np.sin(theta)],
         [np.sin(theta), np.cos(theta)]
     ])
     
-    # 5. 执行变换并创建新掩码
-    # 创建空白掩码
+    # 8. 使用矩阵乘法替代逐点计算
+    # 将所有参考点组织为矩阵形式
+    rel_points = np.vstack([y_ref - ref_center_y, x_ref - ref_center_x])
+    
+    # 一次性应用旋转和缩放
+    transformed_points = rotation_matrix @ rel_points * scale_factor
+    
+    # 转换回原始坐标系
+    new_y = np.round(transformed_points[0, :] + curr_center_y).astype(int)
+    new_x = np.round(transformed_points[1, :] + curr_center_x).astype(int)
+    
+    # 9. 快速创建掩码
+    # 确保点在图像范围内
+    valid_indices = (new_y >= 0) & (new_y < markers.shape[0]) & (new_x >= 0) & (new_x < markers.shape[1])
+    new_y = new_y[valid_indices]
+    new_x = new_x[valid_indices]
+    
+    # 创建新掩码
     new_mask = np.zeros_like(markers)
+    new_mask[new_y, new_x] = 1
     
-    # 对参考掩码中的每个点进行变换，但保持中心点为GT中心点
-    for y, x in zip(y_ref, x_ref):
-        # 相对于参考中心的坐标
-        rel_y = y - ref_center_y
-        rel_x = x - ref_center_x
+    # 应用形态学操作
+    if len(new_y) > 0:  # 确保有有效点
+        new_mask = new_mask.astype(np.uint8)
+        kernel = np.ones((3, 3), np.uint8)
+        new_mask = cv2.morphologyEx(new_mask, cv2.MORPH_CLOSE, kernel)
         
-        # 旋转和缩放
-        point = np.array([rel_y, rel_x])
-        transformed_point = rotation_matrix @ point * scale_factor
-        
-        # 计算在新掩码中的坐标 - 使用GT中心点
-        new_y = int(transformed_point[0] + curr_center_y)
-        new_x = int(transformed_point[1] + curr_center_x)
-        
-        # 确保在图像范围内
-        if 0 <= new_y < markers.shape[0] and 0 <= new_x < markers.shape[1]:
-            new_mask[new_y, new_x] = 1
+        # 确保连通性
+        num_labels, labels = cv2.connectedComponents(new_mask)
+        if num_labels > 1:
+            max_label = 1
+            max_size = 0
+            for i in range(1, num_labels):
+                size = np.sum(labels == i)
+                if size > max_size:
+                    max_size = size
+                    max_label = i
+            new_mask = (labels == max_label).astype(np.uint8)
     
-    # 确保没有断开的区域，进行形态学闭操作
-    new_mask = new_mask.astype(np.uint8)
-    kernel = np.ones((3, 3), np.uint8)
-    new_mask = cv2.morphologyEx(new_mask, cv2.MORPH_CLOSE, kernel)
-    
-    # 确保连通性 - 只保留最大的连通区域
-    num_labels, labels = cv2.connectedComponents(new_mask)
-    if num_labels > 1:
-        max_label = 1
-        max_size = 0
-        for i in range(1, num_labels):
-            size = np.sum(labels == i)
-            if size > max_size:
-                max_size = size
-                max_label = i
-        new_mask = (labels == max_label).astype(np.uint8)
-    
-    # 获取最终面积
+    # 10. 简化面积调整逻辑
     final_area = np.sum(new_mask)
     
-    # 检查最终面积是否接近目标面积
-    if abs(final_area - target_area) > 0.1 * target_area:
-        # 进行二次调整，通过迭代缩放来达到目标面积
-        adjustment_attempts = 3
-        for attempt in range(adjustment_attempts):
-            if abs(final_area - target_area) <= 0.05 * target_area:
-                break  # 已经足够接近
-                
-            # 更新缩放系数
-            if final_area > 0:  # 防止除以零
-                scale_factor = scale_factor * np.sqrt(target_area / final_area)
-            else:
-                # 如果面积为零，使用一个安全的缩放值
-                scale_factor = 1.0  # 或者其他合理的默认值
-            
-            # 重新创建掩码
+    # 11. 仅在必要时执行二次调整
+    if abs(final_area - target_area) > 0.1 * target_area and final_area > 0:
+        # 直接计算最终缩放因子
+        final_scale = scale_factor * np.sqrt(target_area / final_area)
+        
+        # 重新应用变换，一次性计算
+        transformed_points = rotation_matrix @ rel_points * final_scale
+        new_y = np.round(transformed_points[0, :] + curr_center_y).astype(int)
+        new_x = np.round(transformed_points[1, :] + curr_center_x).astype(int)
+        
+        # 快速创建新掩码
+        valid_indices = (new_y >= 0) & (new_y < markers.shape[0]) & (new_x >= 0) & (new_x < markers.shape[1])
+        new_y = new_y[valid_indices]
+        new_x = new_x[valid_indices]
+        
+        if len(new_y) > 0:
             new_mask = np.zeros_like(markers)
-            for y, x in zip(y_ref, x_ref):
-                rel_y = y - ref_center_y
-                rel_x = x - ref_center_x
-                point = np.array([rel_y, rel_x])
-                transformed_point = rotation_matrix @ point * scale_factor
-                if np.isfinite(transformed_point[0]) and np.isfinite(transformed_point[1]):
-                    new_y = int(transformed_point[0] + curr_center_y)
-                    new_x = int(transformed_point[1] + curr_center_x)
-                    # 确保在图像范围内
-                    if 0 <= new_y < markers.shape[0] and 0 <= new_x < markers.shape[1]:
-                        new_mask[new_y, new_x] = 1
-            
-            # 再次进行形态学操作确保完整性
+            new_mask[new_y, new_x] = 1
             new_mask = new_mask.astype(np.uint8)
             new_mask = cv2.morphologyEx(new_mask, cv2.MORPH_CLOSE, kernel)
             
-            # 只保留最大连通区域
+            # 确保连通性
             num_labels, labels = cv2.connectedComponents(new_mask)
             if num_labels > 1:
-                max_label = max(range(1, num_labels), key=lambda i: np.sum(labels == i))
-                new_mask = (labels == max_label).astype(np.uint8)
-            
-            final_area = np.sum(new_mask)
+                labels_dict = {i: np.sum(labels == i) for i in range(1, num_labels)}
+                if labels_dict:
+                    max_label = max(labels_dict, key=labels_dict.get)
+                    new_mask = (labels == max_label).astype(np.uint8)
     
-    # 更新标记
+    # 12. 快速更新标记
     modified_markers = markers.copy()
-    modified_markers[current_mask] = 0  # 清除原标记
-    modified_markers[new_mask > 0] = label_id  # 添加新标记
+    modified_markers[current_mask] = 0 
+    modified_markers[new_mask > 0] = label_id
     
+    # 调试相关代码放在最后，且只在debug=True时执行
     if debug:
         # 可视化变换结果
         plt.figure(figsize=(15, 5))
@@ -614,10 +589,6 @@ def apply_prior_constraints(markers, label, size, uncertainty,
         current_time: 时间戳
         mu: GT中心点 - shape为[J, 2]，坐标为(y, x)
     """
-    # 从GPU转到CPU处理
-    markers_np = markers.detach().cpu().numpy()
-    label_np = label.detach().cpu().numpy()
-    
     # 创建GT中心点字典
     gt_centers = {}
     if mu is not None and isinstance(mu, torch.Tensor):
@@ -626,94 +597,66 @@ def apply_prior_constraints(markers, label, size, uncertainty,
             if j < len(mu_np):
                 # 注意：mu中的坐标是(x,y)，而我们需要(y,x)
                 gt_centers[j] = (mu_np[j][1], mu_np[j][0])
+    with torch.no_grad():  # 减少内存使用
+        # 仅执行一次CPU转换而不是多次
+        markers_np = markers.detach().cpu().numpy()
+        label_np = label.detach().cpu().numpy()
+        
+        # 预先计算所有目标的面积，而不是在循环中重复计算
+        all_areas = {}
+        for j in range(J):
+            area = np.sum(markers_np == (j + 1))
+            all_areas[j+1] = area
+        
+        # 简化目标分组逻辑
+        class_groups = {}
+        for j in range(J):
+            cls = int(label_np[j])
+            if cls not in class_groups:
+                class_groups[cls] = []
+            
+            # 使用预先计算的面积
+            area = all_areas[j+1]
+            if area > 0:
+                class_groups[cls].append((j, area))
     
-    # 按类别分组目标
-    class_groups = {}
-    for j in range(J):
-        cls = int(label_np[j])
-        if cls not in class_groups:
-            class_groups[cls] = []
-        area = np.sum(markers_np == (j + 1))
-        if area > 0:  # 确保分水岭结果中目标存在
-            class_groups[cls].append((j, area))
-    
-    # 创建一个标记掩码的副本，用于修改
-    modified_markers = markers_np.copy()
+        # 创建修改掩码的副本
+        modified_markers = markers_np.copy()
     
     # 情况1: 处理同一图片内多种目标类别的情况
     if len(class_groups) > 1:
-        # 先处理同一类别有多个目标的情况
-        for cls, objects in class_groups.items():
-            if len(objects) > 1:
-                # 计算该类别目标的平均面积
-                areas = [area for _, area in objects]
-                mean_area = np.mean(areas)
-                
-                # 根据阈值确定允许的面积范围
-                min_area = mean_area * min_ratio_threshold[cls]
-                max_area = mean_area * max_ratio_threshold[cls]
-                
-                # 调整不符合范围的目标
-                for j, area in objects:
-                    if area < min_area:
-                        # 区域生长直到达到阈值
-                        modified_markers = region_grow(modified_markers, j+1, min_area, image)
-                    elif area > max_area:
-                        # 使用形状旋转替代方法代替腐蚀
-                        modified_markers = region_rotate_replace(modified_markers, j+1, max_area, image, objects, current_time,gt_centers,debug)
+        # 跳过处理单个实例的类别
+        multi_instance_classes = {cls: objs for cls, objs in class_groups.items() if len(objs) > 1}
         
-        # 处理只有一个实例的类别，它们需要与其他类别进行比较
-        single_instance_classes = {cls: objs[0] for cls, objs in class_groups.items() if len(objs) == 1}
-        
-        if len(single_instance_classes) > 0:
-            # 如果有多个单实例类别，两两配对处理
-            classes = list(single_instance_classes.keys())
-            for i in range(len(classes)):
-                for j in range(i+1, len(classes)):
-                    cls1, cls2 = classes[i], classes[j]
-                    j1, area1 = single_instance_classes[cls1]
-                    j2, area2 = single_instance_classes[cls2]
-                    
-                    # 根据不可信度计算贡献权重
-                    s1 = uncertainty[cls1]
-                    s2 = uncertainty[cls2]
-                    
-                    # 理想面积比例
-                    c1 = size[cls1]
-                    c2 = size[cls2]
-                    
-                    # 检查当前面积比例是否在合理范围内
-                    current_ratio = area1 / area2
-                    target_ratio = c1 / c2
-                    
-                    # 如果比例不合理，则调整
-                    if abs(current_ratio - target_ratio) > 0.2 * target_ratio:
-                        # 使用公式计算调整量
-                        t = (c1 * area2 - c2 * area1) / (c2 * s1 + c1 * s2)
-                        delta_area1 = s1 * t
-                        delta_area2 = s2 * t
-                        
-                        # 根据计算结果调整区域
-                        if delta_area1 > 0:
-                            # 区域1需要扩大
-                            modified_markers = region_grow(modified_markers, j1+1, area1 + delta_area1, image)
-                        elif delta_area1 < 0:
-                            # 区域1需要缩小 - 使用旋转替代方法
-                            obj1 = [(j1, area1)]
-                            if len(class_groups[cls1]) > 1:
-                                obj1 = class_groups[cls1]
-                            modified_markers = region_rotate_replace(modified_markers, j1+1, area1 + delta_area1, image, obj1, current_time,gt_centers,debug)
-                            
-                        if delta_area2 > 0:
-                            # 区域2需要扩大
-                            modified_markers = region_grow(modified_markers, j2+1, area2 + delta_area2, image)
-                        elif delta_area2 < 0:
-                            # 区域2需要缩小 - 使用旋转替代方法
-                            obj2 = [(j2, area2)]
-                            if len(class_groups[cls2]) > 1:
-                                obj2 = class_groups[cls2]
-                            modified_markers = region_rotate_replace(modified_markers, j2+1, area2 + delta_area2, image, obj2, current_time,gt_centers,debug)
-     
+        # 使用向量化操作批处理同类别目标
+        for cls, objects in multi_instance_classes.items():
+            # 只计算一次平均面积
+            areas = [area for _, area in objects]
+            mean_area = np.mean(areas)
+            
+            min_area = mean_area * min_ratio_threshold[cls]
+            max_area = mean_area * max_ratio_threshold[cls]
+            
+            # 根据面积分组处理，减少函数调用次数
+            small_objects = [(j, area) for j, area in objects if area < min_area]
+            large_objects = [(j, area) for j, area in objects if area > max_area]
+            
+            # 批处理小目标
+            if small_objects:
+                # 实现批量区域生长算法
+                modified_markers = batch_region_grow(modified_markers, [j+1 for j, _ in small_objects], 
+                                                   [min_area for _ in small_objects], image)
+            
+            # 批处理大目标
+            if large_objects and not debug:  # 如果不是调试模式，使用简化版本
+                modified_markers = batch_region_erode(modified_markers, [j+1 for j, _ in large_objects], 
+                                                     [max_area for _ in large_objects])
+            elif large_objects:  # 调试模式使用原始版本
+                for j, area in large_objects:
+                    modified_markers = region_rotate_replace(modified_markers, j+1, max_area, image, 
+                                                           objects, current_time, gt_centers, debug)
+    
+    # 将结果转回PyTorch tensor，一次性操作
     # 情况2: 处理同一图片只有一种目标类别的情况
     elif len(class_groups) == 1:
         single_instance_classes = {cls: objs[0] for cls, objs in class_groups.items() if len(objs) == 1}
@@ -828,86 +771,125 @@ def region_grow(markers, label_id, target_area, image):
     markers_copy[new_mask] = label_id
     
     return markers_copy
-
-def region_erode(markers, label_id, target_area,timestamp):
-    """
-    形态学腐蚀算法，减小目标区域直到达到目标面积
-    """
-    import matplotlib.pyplot as plt
-    
+def simple_region_erode(markers, label_id, target_area):
+    """简化版的区域腐蚀函数，更快速地减小目标区域"""
     current_mask = markers == label_id
     current_area = np.sum(current_mask)
 
     if current_area <= target_area:
         return markers
     
-    # 保存原始掩码用于可视化
-    original_mask = current_mask.copy()
+    # 计算需要移除的面积比例
+    remove_ratio = 1.0 - target_area / current_area
     
     # 转换为OpenCV格式
     mask = current_mask.astype(np.uint8) * 255
     
-    # 创建不同尺度的结构元素用于腐蚀
-    kernel_small = np.ones((3, 3), np.uint8)
-    kernel_medium = np.ones((5, 5), np.uint8)
-    kernel_large = np.ones((7, 7), np.uint8)  # 添加更大的内核
+    # 创建距离变换
+    dist = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
     
-    # 逐步腐蚀直到达到目标面积
-    iterations = 0
-    max_iterations = 50  # 防止无限循环
+    # 根据距离排序创建阈值
+    sorted_dist = np.sort(dist[dist > 0].flatten())
+    threshold_idx = int(len(sorted_dist) * remove_ratio)
     
-    # 记录腐蚀的历史
-    history = [(iterations, current_area, 0)]
-    masks_history = [current_mask.copy()]
-    
-    while current_area > target_area and iterations < max_iterations:
-        if iterations < 10:
-            # 前10次使用小内核
-            kernel = kernel_small
-            kernel_name = "小内核(3x3)"
-            mask_eroded = cv2.erode(mask, kernel, iterations=1)
-        elif iterations < 20:
-            # 中等内核
-            kernel = kernel_medium
-            kernel_name = "中等内核(5x5)"
-            mask_eroded = cv2.erode(mask, kernel, iterations=1)
-        else:
-            # 大内核
-            kernel = kernel_large
-            kernel_name = "大内核(7x7)"
-            mask_eroded = cv2.erode(mask, kernel, iterations=1)
-            
-        # 更新当前掩码和面积
-        new_mask = mask_eroded > 0
-        new_area = np.sum(new_mask)
-        area_reduction = current_area - new_area
-    
-        if new_area < current_area:
-            # 更新标记
-            markers_copy = markers.copy()
-            removed_pixels = current_mask & ~new_mask
-
-            markers_copy[removed_pixels] = 0  # 移除腐蚀掉的部分
-            markers = markers_copy
-            current_mask = new_mask
-            current_area = new_area
-            mask = mask_eroded
-            
-            # 记录历史
-            history.append((iterations+1, current_area, area_reduction))
-            masks_history.append(current_mask.copy())
-        else:
-            # 无法进一步减小
-            break
-            
-        iterations += 1
+    if threshold_idx < len(sorted_dist):
+        threshold = sorted_dist[threshold_idx]
+        # 通过距离阈值快速腐蚀
+        new_mask = dist > threshold
         
-        # 如果已经接近目标面积，可以提前结束
-        if current_area <= 1.05 * target_area:
-            break
+        # 更新标记
+        modified_markers = markers.copy()
+        removed_pixels = current_mask & ~new_mask
+        modified_markers[removed_pixels] = 0
+        
+        return modified_markers
     
-
     return markers
+
+def batch_region_grow(markers, label_ids, target_areas, image):
+    """批量处理多个区域的生长"""
+    modified_markers = markers.copy()
+    
+    # 一次性预处理图像
+    if len(image.shape) > 2 and image.shape[2] > 1:
+        img_gray = cv2.cvtColor(image.permute(1, 2, 0).cpu().numpy().astype(np.uint8), cv2.COLOR_RGB2GRAY)
+    else:
+        img_gray = image.cpu().numpy().astype(np.uint8)
+    
+    # 创建距离图
+    distance_maps = {}
+    
+    for label_id, target_area in zip(label_ids, target_areas):
+        current_mask = modified_markers == label_id
+        current_area = np.sum(current_mask)
+        
+        if current_area >= target_area:
+            continue
+            
+        # 如果尚未计算，为当前区域创建距离图
+        if label_id not in distance_maps:
+            # 计算边界距离图 - 可以重用计算结果
+            kernel = np.ones((3, 3), np.uint8)
+            dilated = cv2.dilate(current_mask.astype(np.uint8), kernel, iterations=1)
+            boundary = dilated - current_mask.astype(np.uint8)
+            
+            # 计算区域均值
+            region_mean = np.mean(img_gray[current_mask])
+            
+            # 计算边界点与区域均值的差异
+            boundary_points = np.where(boundary > 0)
+            if len(boundary_points[0]) == 0:
+                continue
+                
+            # 创建距离图
+            dist_map = np.ones_like(img_gray, dtype=float) * float('inf')
+            for y, x in zip(boundary_points[0], boundary_points[1]):
+                if 0 <= y < markers.shape[0] and 0 <= x < markers.shape[1] and modified_markers[y, x] <= 0:
+                    dist_map[y, x] = abs(float(img_gray[y, x]) - region_mean)
+            
+            distance_maps[label_id] = (dist_map, current_mask.copy(), region_mean)
+        
+        # 使用距离图扩展区域
+        dist_map, mask, region_mean = distance_maps[label_id]
+        
+        # 找出可以添加的点，按距离排序
+        available_points = []
+        dilated = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
+        boundary = dilated - mask.astype(np.uint8)
+        boundary_points = np.where(boundary > 0)
+        
+        for y, x in zip(boundary_points[0], boundary_points[1]):
+            if 0 <= y < markers.shape[0] and 0 <= x < markers.shape[1] and modified_markers[y, x] <= 0:
+                available_points.append((dist_map[y, x], y, x))
+        
+        # 按距离排序
+        available_points.sort()
+        
+        # 添加点直到达到目标面积
+        for _, y, x in available_points:
+            if np.sum(mask) >= target_area:
+                break
+                
+            mask[y, x] = True
+            modified_markers[y, x] = label_id
+            
+            # 更新边界（可选，通常不需要每次都更新）
+            if np.sum(mask) % 10 == 0:  # 每添加10个点更新一次边界
+                dilated = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
+                boundary = dilated - mask.astype(np.uint8)
+                boundary_points = np.where(boundary > 0)
+    
+    return modified_markers
+
+def batch_region_erode(markers, label_ids, target_areas):
+    """批量处理多个区域的腐蚀"""
+    modified_markers = markers.copy()
+    
+    for label_id, target_area in zip(label_ids, target_areas):
+        modified_markers = simple_region_erode(modified_markers, label_id, target_area)
+    
+    return modified_markers
+
 
 @MODELS.register_module()
 class VoronoiWatershedLoss(nn.Module):
