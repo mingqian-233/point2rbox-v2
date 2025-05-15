@@ -67,11 +67,13 @@ model = dict(
             type='GaussianOverlapLoss', loss_weight=10.0, lamb=0),
         loss_voronoi=dict(
             type='VoronoiWatershedLoss', loss_weight=5.0,
-            debug=False),
+            # debug=True
+            ),
         loss_bbox_edg=dict(
             type='EdgeLoss', loss_weight=0.3),
         loss_ss=dict(
-            type='Point2RBoxV2ConsistencyLoss', loss_weight=1.0),
+            type='Point2RBoxV2ConsistencyLoss', loss_weight=1.0
+            ),
         # 按照classes顺序整理的参数列表
         size = [
             25,    # plane
