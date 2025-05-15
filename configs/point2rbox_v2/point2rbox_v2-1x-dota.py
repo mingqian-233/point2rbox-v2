@@ -110,12 +110,12 @@ model = dict(
 
         min_ratio_threshold = [
             0.1,    # plane
-            0.001,  # baseball-diamond
+            0.01,  # baseball-diamond
             0.1,    # bridge
             0.9,    # ground-track-field
-            0.5,    # small-vehicle
-            0.6,    # large-vehicle
-            0.05,   # ship
+            0.8,    # small-vehicle
+            0.8,    # large-vehicle
+            0.5,   # ship
             0.1,    # tennis-court
             0.1,    # basketball-court
             0.25,   # storage-tank
@@ -131,9 +131,9 @@ model = dict(
             0.05,   # baseball-diamond
             0.1,    # bridge
             0.9,    # ground-track-field
-            0.5,    # small-vehicle
-            0.6,    # large-vehicle
-            0.05,   # ship
+            0.8,    # small-vehicle
+            0.8,    # large-vehicle
+            0.5,   # ship
             0.1,    # tennis-court
             0.1,    # basketball-court
             0.25,   # storage-tank
@@ -168,7 +168,7 @@ train_pipeline = [
     dict(type='mmdet.PackDetInputs')
 ]
 
-train_dataloader = dict(batch_size=6,
+train_dataloader = dict(batch_size=1,
                         dataset=dict(pipeline=train_pipeline))
 
 # optimizer

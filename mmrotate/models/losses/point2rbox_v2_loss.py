@@ -178,7 +178,7 @@ class GaussianOverlapLoss(nn.Module):
             avg_factor=avg_factor))
 
 
-def plot_gaussian_voronoi_watershed(*images):
+def plot_gaussian_voronoi_watershed(*images,current_time=None):
     """Plot figures for debug."""
     import matplotlib.pyplot as plt
     plt.figure(dpi=300, figsize=(len(images) * 4, 4))
@@ -201,7 +201,7 @@ def plot_gaussian_voronoi_watershed(*images):
             plt.imshow(img)
         plt.xticks([])
         plt.yticks([])
-    plt.savefig(f'debug/Gaussian-Voronoi-{fileid}.png')
+    plt.savefig(f'debug/Gaussian-Voronoi-{current_time}-1.png')
     plt.close()
 
 
@@ -305,10 +305,14 @@ def gaussian_voronoi_watershed_loss(mu, sigma,
                                           min_ratio_threshold, max_ratio_threshold, 
                                           image, J)
         
+    # 调取当前时间
+    import datetime
+    now = datetime.datetime.now()
+    current_time = now.strftime("%Y-%m-%d-%H-%M-%S")
 
     if debug:
-        # plot_gaussian_voronoi_watershed(image, cls_bg, markers)
-        plot_watershed_result(image, ori_markers,markers, label)
+        plot_gaussian_voronoi_watershed(image, cls_bg, markers,current_time=current_time)
+        plot_watershed_result(image, ori_markers,markers, label,current_time)
 
     L, V = torch.linalg.eigh(sigma)
     L_target = []
@@ -707,7 +711,7 @@ def plot_edge_map(feat, edgex, edgey):
         plt.yticks([])
     plt.savefig(f'debug/Edge-Map-{fileid}.png')
     plt.close()
-def plot_watershed_result(image, original_markers, optimized_markers, labels, edgex=None, edgey=None):
+def plot_watershed_result(image, original_markers, optimized_markers, labels,current_time, edgex=None, edgey=None):
     """
     绘制原始分水岭结果与优化后结果的对比，并标注类别
     
@@ -889,10 +893,10 @@ def plot_watershed_result(image, original_markers, optimized_markers, labels, ed
     plt.subplots_adjust(bottom=0.12 if used_labels else 0.05)  # 为图例留出空间
     
     # 保存图像
-    plt.savefig(f'debug/Watershed-Comparison-{fileid}.png')
+    plt.savefig(f'debug/Watershed-Comparison-{current_time}-2.png')
     plt.close()
 
-    print(f"Comparison visualization saved to debug/Watershed-Comparison-{fileid}.png")
+    print(f"Comparison visualization saved to debug/Watershed-Comparison-{current_time}.png")
     
     return fileid
 
