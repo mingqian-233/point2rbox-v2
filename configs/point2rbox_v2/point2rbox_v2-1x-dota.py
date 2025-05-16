@@ -67,7 +67,7 @@ model = dict(
             type='GaussianOverlapLoss', loss_weight=10.0, lamb=0),
         loss_voronoi=dict(
             type='VoronoiWatershedLoss', loss_weight=5.0,
-            # debug=True
+            debug=False
             ),
         loss_bbox_edg=dict(
             type='EdgeLoss', loss_weight=0.3),
@@ -148,7 +148,7 @@ model = dict(
 
         ),
     # training and testing settings
-    train_cfg=None,
+    train_cfg=dict(debug=True),
     test_cfg=dict(
         nms_pre=2000,
         min_bbox_size=0,

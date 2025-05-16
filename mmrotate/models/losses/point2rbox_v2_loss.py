@@ -560,7 +560,7 @@ def region_rotate_replace(markers, label_id, target_area, image, objects, curren
         
         plt.suptitle(f'形状旋转替代 - 标签 {label_id} (保持GT中心点)', fontsize=16)
         plt.tight_layout()
-        plt.savefig(f'debug/Rotate_Replace_Label{label_id}_{current_time}.png')
+        plt.savefig(f'debug/{current_time}-Rotate_Replace_Label{label_id}_.png')
         plt.close()
         
         print(f"形状旋转替代完成: 原面积 {current_area} -> 新面积 {final_area}")
@@ -597,32 +597,31 @@ def apply_prior_constraints(markers, label, size, uncertainty,
             if j < len(mu_np):
                 # 注意：mu中的坐标是(x,y)，而我们需要(y,x)
                 gt_centers[j] = (mu_np[j][1], mu_np[j][0])
-    with torch.no_grad():  # 减少内存使用
-        # 仅执行一次CPU转换而不是多次
-        markers_np = markers.detach().cpu().numpy()
-        label_np = label.detach().cpu().numpy()
-        
-        # 预先计算所有目标的面积，而不是在循环中重复计算
-        all_areas = {}
-        for j in range(J):
-            area = np.sum(markers_np == (j + 1))
-            all_areas[j+1] = area
-        
-        # 简化目标分组逻辑
-        class_groups = {}
-        for j in range(J):
-            cls = int(label_np[j])
-            if cls not in class_groups:
-                class_groups[cls] = []
-            
-            # 使用预先计算的面积
-            area = all_areas[j+1]
-            if area > 0:
-                class_groups[cls].append((j, area))
+    # 仅执行一次CPU转换而不是多次
+    markers_np = markers.detach().cpu().numpy()
+    label_np = label.detach().cpu().numpy()
     
-        # 创建修改掩码的副本
-        modified_markers = markers_np.copy()
+    # 预先计算所有目标的面积，而不是在循环中重复计算
+    all_areas = {}
+    for j in range(J):
+        area = np.sum(markers_np == (j + 1))
+        all_areas[j+1] = area
     
+    # 简化目标分组逻辑
+    class_groups = {}
+    for j in range(J):
+        cls = int(label_np[j])
+        if cls not in class_groups:
+            class_groups[cls] = []
+        
+        # 使用预先计算的面积
+        area = all_areas[j+1]
+        if area > 0:
+            class_groups[cls].append((j, area))
+
+    # 创建修改掩码的副本
+    modified_markers = markers_np.copy()
+
     # 情况1: 处理同一图片内多种目标类别的情况
     if len(class_groups) > 1:
         # 跳过处理单个实例的类别
@@ -648,10 +647,7 @@ def apply_prior_constraints(markers, label, size, uncertainty,
                                                    [min_area for _ in small_objects], image)
             
             # 批处理大目标
-            if large_objects and not debug:  # 如果不是调试模式，使用简化版本
-                modified_markers = batch_region_erode(modified_markers, [j+1 for j, _ in large_objects], 
-                                                     [max_area for _ in large_objects])
-            elif large_objects:  # 调试模式使用原始版本
+            if large_objects :
                 for j, area in large_objects:
                     modified_markers = region_rotate_replace(modified_markers, j+1, max_area, image, 
                                                            objects, current_time, gt_centers, debug)
